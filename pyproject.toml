@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dmipy-tract"
+version = "0.1.0.dev0"
+description = "Biophysically-informed tractography and tractometry powered by dmipy-core microstructure models"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "nibabel>=5.0",
+    "dipy>=1.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7", "pytest-cov"]
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["dmipy_tract*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
