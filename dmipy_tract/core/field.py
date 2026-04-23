@@ -38,9 +38,33 @@ class MicrostructureField:
         self.shape = params[first_key].shape[:3]
 
         # Pre-cache peaks and parameter arrays as float32 for interpolation speed
-        self._peaks = fitted_model.peaks_cartesian()          # (X, Y, Z, K, 3)
+        # FittedMultiCompartmentSphericalHarmonicsModel uses FOD-based peak
+        # extraction (peaks_directions) rather than orientation-parameter peaks.
+        if hasattr(fitted_model, 'peaks_cartesian'):
+            try:
+                self._peaks = fitted_model.peaks_cartesian()  # (X, Y, Z, K, 3)
+            except ValueError:
+                # SH models raise ValueError from peaks_spherical when no
+                # 'mu' orientation parameter is present; fall back to FOD peaks
+                self._peaks = self._peaks_from_fod(fitted_model)
+        else:
+            self._peaks = self._peaks_from_fod(fitted_model)
         self._params = {k: np.asarray(v, dtype=np.float32)
                         for k, v in params.items()}
+
+    @staticmethod
+    def _peaks_from_fod(fitted_model, max_peaks: int = 5) -> np.ndarray:
+        """Extract FOD peaks for FittedMultiCompartmentSphericalHarmonicsModel.
+
+        Returns an (X, Y, Z, max_peaks, 3) float32 array of cartesian peak
+        directions, using dipy's peak_directions on a sphere tessellation.
+        """
+        from dipy.data import get_sphere
+        sphere = get_sphere('symmetric362')
+        peaks, values, indices = fitted_model.peaks_directions(
+            sphere, max_peaks=max_peaks)
+        # peaks is (X, Y, Z, max_peaks, 3)
+        return np.asarray(peaks, dtype=np.float32)
 
     @classmethod
     def from_fitted_model(cls, fitted_model, affine: np.ndarray) -> "MicrostructureField":
