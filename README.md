@@ -46,33 +46,33 @@ false, 0 missed), as in the published dipy runs.
 
 | tracker | streamlines | Pearson vs strand count | vs area | tracking |
 |---|---|---|---|---|
-| this package, L40S | 659,840 | **0.927** | 0.929 | **6.7 s** steady, 12.6 s first call (compile) |
-| this package, CPU (16 of 72 cores, shared box) | 659,840 | 0.927 | 0.929 | 659 s |
+| this package, L40S | 659,840 | **0.927** | 0.929 | **2.5 s** steady, 10.8 s first call (compile) |
+| this package, CPU (16 of 72 cores, shared box, before compaction) | 659,840 | 0.927 | 0.929 | 659 s |
 | dipy `LocalTracking` on the same FOD and seeds, L40S host | 2,822,911 (one per FOD peak per seed) | 0.917 | 0.917 | 1016 s |
 | the replay paper's dipy pipeline (dipy CSD), dmipy-sim#505 | 1.6 M | 0.904 – 0.912 | | 250 – 500 s |
 
 The two connectivity matrices (this tracker and dipy on the same field) correlate at 0.997. CPU and GPU tractograms
-are bit-identical (lengths, stop reasons and positions) on the test fields.
+are bit-identical (lengths, stop reasons and positions), and so are tractograms at any chunk size or phase length.
 
-Where the 6.7 s go (`benchmarks/profile_track.py` on the L40S): the lockstep halves 6.5 s of a 14 s pre-optimisation
-run, because each chunk of 65,536 lanes runs to its longest lane (266 steps) while the mean streamline has 35 points;
-the host join 1.5 s; buffer transfers and padding the rest. The kernel itself does 6.6e7 lane-steps/s (1 ms per
-iteration of 65,536 lanes at order 8 on 362 directions), insensitive to the rule, the sphere size and the order
-(`benchmarks/ablate2.py`): it is gather-bound on the field, as designed.
+Where the 2.5 s go (`benchmarks/profile_track.py`, L40S): the phase kernels 0.9 s (40 calls at 65,536 or 4,096 lanes,
+phases of 32 steps between compactions of the active lanes), the ragged scatter on the host 0.9 s, host state and
+transfers 0.7 s. Before compaction the kernels alone took 6.5 s, because each chunk ran to its longest lane (266 steps
+for a mean streamline of 35 points). The kernel does 6.6e7 lane-steps/s flat out (1 ms per iteration of 65,536 lanes at
+order 8 on 362 directions), insensitive to the rule, the sphere size and the order (`benchmarks/ablate2.py`): it is
+gather-bound on the field, as designed. Phase lengths 16 and 32 measure the same; 64 costs 1 s more.
 
 Brain scale (`benchmarks/scaling.py`, a 145 × 174 × 145 order-8 field, streamlines of 227 points, L40S):
 
 | seeds | tracking | host RSS |
 |---|---|---|
-| 10⁵ | 8.8 s | 4.5 GB |
-| 10⁶ | 30 s | 8.5 GB |
-| 10⁷ | 1755 s, 58 GB | the output itself is 2.3 × 10⁹ points (27 GB float32): not a case for an in-memory tractogram |
+| 10⁵ | 7.2 s | 3.6 GB |
+| 10⁶ | 17 s | 9.1 GB |
+| 10⁷ | the output itself is 2.3 × 10⁹ points (27 GB float32): not a case for an in-memory tractogram | |
 
-At brain scale the kernel is a quarter of the time; the ragged host assembly and the transfers are the rest.
-
-**Next, measured not guessed:** (1) lane compaction between phases, so a chunk's cost follows the mean streamline
-rather than its longest (DiSCo's halves 6.5 s → about 1.5 s); (2) the join on the device and a streaming `.tck`
-writer, for 10⁶ – 10⁷ seeds; (3) a persistent compile cache, since the first call pays 6 s per chunk shape.
+At brain scale the host side (the ragged scatter, three passes over the points) is most of the time; the three
+scatter formulations tried run within 5 % of each other on the host, so the next gain is a device-side join with a
+streaming `.tck` writer, which also covers 10⁷ seeds. The first call pays about 8 s of compile for the three kernel
+shapes; a persistent compile cache is the other pending item.
 
 ## Tests
 

@@ -158,6 +158,20 @@ def test_same_key_same_tractogram_and_chunk_size_does_not_matter(cross):
     assert not np.array_equal(d.points, a.points)
 
 
+def test_phase_length_does_not_matter(cross):
+    """Lane compaction runs in phases of ``phase_steps``; the tractogram is bitwise the same for any phasing."""
+    f, _, crossing = cross
+    seeds = np.argwhere(crossing).astype(float) + 0.25
+    a = track(f, seeds, rule='probabilistic', key=11, max_steps=60)
+    for K in (1, 5, 32, 60, 500):
+        c = track(f, seeds, rule='probabilistic', key=11, max_steps=60, phase_steps=K)
+        np.testing.assert_array_equal(c.points, a.points)
+        np.testing.assert_array_equal(c.offsets, a.offsets)
+        np.testing.assert_array_equal(c.stop_reason, a.stop_reason)
+    with pytest.raises(ValueError, match="phase_steps must be at least 1"):
+        track(f, seeds, phase_steps=0)
+
+
 def test_rigid_affine_maps_the_identity_streamlines(cross):
     """A rotation and translation of the grid, the FOD and the sphere rotated with it: the same streamlines mapped."""
     f, _, crossing = cross
