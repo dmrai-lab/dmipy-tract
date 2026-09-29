@@ -37,6 +37,15 @@ Randomness is counter-based (`fold_in(fold_in(key, seed_index), step)`): streaml
 seed `i` and the field, not of the chunk size or the device. Positions are float32 millimetres; every matrix product
 is at `Precision.HIGHEST` (a float32 matmul on CUDA is TF32 otherwise).
 
+**Two backends, one tracker** (`track(..., backend="jax" | "torch")`, issue #4). The torch kernel
+(`dmipy_tract/_torch.py`, `pip install dmipy-tract[torch]`) exists for hosts that run PyTorch only (Hugging Face's
+shared GPU pool); it is eager, one step for every active lane at once in chunks, the same conventions, TF32 off for
+the call. Its draws come from its own counter-based stream (the splitmix64 finaliser of `(key, streamline, counter)`,
+the same bits on the CPU, on CUDA and in numpy), so the two backends give different, equally valid probabilistic
+tractograms; on the deterministic rule they agree to float32 arithmetic. The torch kernel passes the same
+constructed-field tests (stopping, reasons, join, backward half, circle, the per-streamline reference with its own
+draws, chunk invariance, CPU = CUDA bit for bit).
+
 ## Measured
 
 The DiSCo acceptance (`benchmarks/disco.py`, `benchmarks/out/`): the reference replay volume, CSD with dmipy-fit's
