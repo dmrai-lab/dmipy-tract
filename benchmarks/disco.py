@@ -18,7 +18,7 @@ import time
 
 import numpy as np
 
-REF_DEFAULT = "/home/rutger/dmrai-ws/dmrai-papers-private/replay_paper/benchmarks/disco/data"
+REF_DEFAULT = os.environ.get("DISCO_REF", "disco-data")     # the DiSCo download: mask, ROIs, ground-truth matrices
 HF_REPO = "SubstrateCommons/disco-replay"
 SH_ORDER = 8
 

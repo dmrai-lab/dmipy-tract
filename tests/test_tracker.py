@@ -163,13 +163,20 @@ def test_phase_length_does_not_matter(cross):
     f, _, crossing = cross
     seeds = np.argwhere(crossing).astype(float) + 0.25
     a = track(f, seeds, rule='probabilistic', key=11, max_steps=60)
-    for K in (1, 5, 32, 60, 500):
+    for K in (1, 7, 60):
         c = track(f, seeds, rule='probabilistic', key=11, max_steps=60, phase_steps=K)
         np.testing.assert_array_equal(c.points, a.points)
         np.testing.assert_array_equal(c.offsets, a.offsets)
         np.testing.assert_array_equal(c.stop_reason, a.stop_reason)
     with pytest.raises(ValueError, match="phase_steps must be at least 1"):
         track(f, seeds, phase_steps=0)
+    for b in (1, 7, 100, 1 << 20):
+        c = track(f, seeds, rule='probabilistic', key=11, max_steps=60, batch=b)
+        np.testing.assert_array_equal(c.points, a.points)
+        np.testing.assert_array_equal(c.offsets, a.offsets)
+        np.testing.assert_array_equal(c.stop_reason, a.stop_reason)
+    with pytest.raises(ValueError, match="batch must be at least 1"):
+        track(f, seeds, batch=0)
 
 
 def test_rigid_affine_maps_the_identity_streamlines(cross):

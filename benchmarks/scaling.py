@@ -44,8 +44,9 @@ def main():
     for n in a.seeds:
         seeds = all_seeds[rng.choice(len(all_seeds), n, replace=n > len(all_seeds))] + rng.uniform(-0.6, 0.6, (n, 3))
         t0 = time.perf_counter()
-        tg = track(field, seeds[:4096], step_mm=0.6, max_steps=a.max_steps, key=1)
-        t_first = time.perf_counter() - t0
+        tg = track(field, seeds, step_mm=0.6, max_steps=a.max_steps, key=1)
+        t_first = time.perf_counter() - t0                  # includes the compiles this seed count needs
+        del tg
         t0 = time.perf_counter()
         tg = track(field, seeds, step_mm=0.6, max_steps=a.max_steps, key=1)
         t = time.perf_counter() - t0

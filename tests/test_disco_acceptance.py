@@ -9,7 +9,7 @@ import pytest
 
 pytestmark = pytest.mark.slow
 
-REF = os.environ.get("DISCO_REF", "/home/rutger/dmrai-ws/dmrai-papers-private/replay_paper/benchmarks/disco/data")
+REF = os.environ.get("DISCO_REF", "disco-data")
 
 
 @pytest.fixture(scope="module")

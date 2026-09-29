@@ -1,5 +1,5 @@
-"""Where the DiSCo tracking time goes: the first-direction call, the phase kernels (by phase index), the host state
-gathers, and the ragged scatter.
+"""Where the DiSCo tracking time goes: the first-direction call, the phase kernels, the device-side join with its
+transfer, and the rest (lane selection and state updates on the device).
 
     DISCO_REF=~/disco-ref python benchmarks/profile_track.py
 """
@@ -25,10 +25,30 @@ field = FODField(sh, np.eye(4), mask | (rois > 0))
 seeds = seeds_from_mask(rois > 0, np.eye(4), density=4)
 print("seeds", len(seeds), "device", jax.devices()[0], flush=True)
 
-times = {"first": 0.0, "phase_kernel": 0.0, "scatter": 0.0}
+times = {"first": 0.0, "phase_kernel": 0.0, "join": 0.0, "select": 0.0, "gather": 0.0, "update": 0.0,
+         "first_point": 0.0}
 calls = {"phase": 0}
 lanes_seen = []
-orig_phase, orig_first, orig_scatter = T._compiled_phase, T._compiled_first, T._Half.scatter
+orig_phase, orig_first, orig_join = T._compiled_phase, T._compiled_first, T._Batch.join
+
+
+def timed_helper(name, orig):
+    def maker(*a):
+        fn = orig(*a)
+
+        def w(*args):
+            t0 = time.perf_counter()
+            out = fn(*args)
+            jax.block_until_ready(out)
+            times[name] += time.perf_counter() - t0
+            return out
+        return w
+    return maker
+
+
+for _name, _attr in (("select", "_compiled_select"), ("gather", "_compiled_gather"), ("update", "_compiled_update"),
+                     ("first_point", "_compiled_first_point")):
+    setattr(T, _attr, timed_helper(_name, getattr(T, _attr)))
 
 
 def timed_phase(*a):
@@ -57,14 +77,14 @@ def timed_first(*a):
     return w
 
 
-def timed_scatter(self, *a, **k):
+def timed_join(self, *a, **k):
     t0 = time.perf_counter()
-    out = orig_scatter(self, *a, **k)
-    times["scatter"] += time.perf_counter() - t0
+    out = orig_join(self, *a, **k)
+    times["join"] += time.perf_counter() - t0
     return out
 
 
-T._compiled_phase, T._compiled_first, T._Half.scatter = timed_phase, timed_first, timed_scatter
+T._compiled_phase, T._compiled_first, T._Batch.join = timed_phase, timed_first, timed_join
 track(field, seeds, key=0)                              # compile every shape this run uses
 for k in times:
     times[k] = 0.0
@@ -75,7 +95,8 @@ tg = track(field, seeds, key=0)
 total = time.perf_counter() - t0
 rest = total - sum(times.values())
 print(f"total {total:.2f} s: first-direction {times['first']:.2f}, phase kernels {times['phase_kernel']:.2f} "
-      f"({calls['phase']} calls, lane counts {sorted(set(lanes_seen))}), scatter {times['scatter']:.2f}, "
-      f"rest (host state, transfers) {rest:.2f}", flush=True)
+      f"({calls['phase']} calls, lane counts {sorted(set(lanes_seen))}), device join + transfer {times['join']:.2f}, "
+      f"select {times['select']:.2f}, gather {times['gather']:.2f}, update {times['update']:.2f}, "
+      f"first_point {times['first_point']:.2f}, rest {rest:.2f}", flush=True)
 print("n_points mean", tg.n_points.mean().round(1), "max", tg.n_points.max(), "stop reasons",
       np.bincount(tg.stop_reason.ravel(), minlength=5).tolist(), flush=True)

@@ -11,22 +11,22 @@
    "streamlines": 100000,
    "points": 22708056,
    "n_points_mean": 227.08056,
-   "first_call_seconds": 5.867223994981032,
-   "seconds": 7.229888527013827,
+   "first_call_seconds": 11.404043144953903,
+   "seconds": 1.3711969659780152,
    "lane_steps": 22808056,
-   "lane_steps_per_second": 3154689.856528182,
-   "host_rss_gb": 3.648648
+   "lane_steps_per_second": 16633683.24603315,
+   "host_rss_gb": 3.384212
   },
   {
    "seeds": 1000000,
    "streamlines": 1000000,
    "points": 226886780,
    "n_points_mean": 226.88678,
-   "first_call_seconds": 0.8248526169918478,
-   "seconds": 17.387478562013712,
+   "first_call_seconds": 7.204283716971986,
+   "seconds": 6.915561300993431,
    "lane_steps": 227886780,
-   "lane_steps_per_second": 13106373.025118344,
-   "host_rss_gb": 9.092852
+   "lane_steps_per_second": 32952752.50719905,
+   "host_rss_gb": 6.211636
   }
  ]
 }
