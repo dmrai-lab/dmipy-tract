@@ -9,6 +9,7 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
 | `dmipy_tract/field.py` | `FODField(sh, affine, mask)`: validation, the clamped trilinear interpolant (numpy), the nearest-voxel mask lookup |
 | `dmipy_tract/sphere.py` | `hemisphere(n)` (Fibonacci, z > 0), `sh_matrix(order, dirs)` = `dmipy_sim.replay.so3.real_sh`, order/count conversions |
 | `dmipy_tract/tracker.py` | `track()`: the first-direction kernel (`_compiled_first`), the phase kernel (`_compiled_phase`, K steps for one lane count), `_Batch` (device-resident state of one batch of seeds; phases with compaction of the active lanes; the device-side join of the phase slabs into the ragged output) and its fixed-shape helpers |
+| `dmipy_tract/_torch.py` | the torch kernel behind `track(backend="torch")` (#4): `_Field` (field, sphere, settings on the device; `amplitudes`, `choose`, `mask_at`), `_half` (one step for every active lane, in chunks; a lockstep half, so point `t` of a lane is taken at loop step `t` and the join is a scatter per step), `track_torch`; `uniform` / `uniform_torch`, the counter-based draw in numpy and torch (identical bits) |
 | `dmipy_tract/tractogram.py` | `Tractogram` (ragged points/offsets, seed_index, stop_reason), `.to_tck` via `dmipy_sim.io.strands.write_tck` |
 | `dmipy_tract/seeding.py` | `seeds_from_mask`: dipy's sub-grid construction |
 | `dmipy_tract/connectivity.py` | endpoint labels (nearest voxel) and the count matrix |
@@ -40,6 +41,11 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
   on jittered seeds (dipy seeds its RNG from the seed's coordinate sum; a regular grid correlates its streamlines).
 - **Declarative docstrings.** What a thing is; no history of what it used to be.
 - **One function per application.** No compatibility spellings; a rename converts every caller.
+- **Two backends are two kernels of one tracker.** `track()` validates once and dispatches; the conventions, the
+  RNG contract (counter-based, chunk-invariant, device-invariant), `Tractogram`, seeding and connectivity are
+  shared. A convention changed in one kernel is changed in the other and in `tests/conftest.py`'s reference. The
+  torch draw is not JAX's stream: probabilistic tractograms differ between backends by design, the deterministic
+  rule must agree (`tests/test_torch_backend.py`).
 
 ## Traps
 

@@ -34,7 +34,7 @@ from .field import FODField
 from .sphere import hemisphere, sh_matrix
 from .tractogram import Tractogram, STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
-__all__ = ['track', 'RULES']
+__all__ = ['track', 'RULES', 'BACKENDS']
 
 RULES = ('probabilistic', 'deterministic')
 _HI = jax.lax.Precision.HIGHEST
@@ -327,9 +327,12 @@ def _points_rows(total):
     return P
 
 
+BACKENDS = ('jax', 'torch')
+
+
 def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0, max_steps=500,
           relative_threshold=0.1, min_length_mm=0.0, sphere=None, initial_directions=None, key=0, chunk=None,
-          phase_steps=None, batch=None):
+          phase_steps=None, batch=None, backend='jax', device=None):
     """Streamlines from every seed of ``seeds_mm (n, 3)`` (world millimetres) on ``field``.
 
     Parameters
@@ -362,6 +365,12 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device memory
         (the phase slabs of a batch stay on the device until its streamlines are joined); the result does not
         depend on it.
+    backend : 'jax' | 'torch'
+        The kernel (dmipy-tract#4): the JAX one (the reference), or :mod:`dmipy_tract._torch` for hosts that run
+        PyTorch only. The conventions are the same; the probabilistic draws come from each backend's own
+        counter-based stream, so the two give different, equally valid tractograms, each independent of ``chunk``.
+    device : optional
+        The torch device (the current CUDA device when one exists, else the CPU); ignored on JAX.
     """
     if not isinstance(field, FODField):
         raise TypeError("field must be an FODField")
@@ -390,10 +399,19 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         initial_directions = np.asarray(initial_directions, np.float64)
         if initial_directions.shape != (n, 3):
             raise ValueError(f"initial_directions must be ({n}, 3), not {initial_directions.shape}")
-    key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
+    if backend not in BACKENDS:
+        raise ValueError(f"backend must be one of {BACKENDS}, not {backend!r}")
     chunk = int(os.environ.get("DMIPY_TRACT_CHUNK", "65536")) if chunk is None else int(chunk)
     if chunk < 1:
         raise ValueError("chunk must be at least 1")
+    if backend == 'torch':
+        if not isinstance(key, (int, np.integer)):
+            raise ValueError("the torch backend takes an int key")
+        from ._torch import track_torch
+        return track_torch(field, seeds, rule=rule, step_mm=step_mm, max_angle=max_angle, max_steps=max_steps,
+                           relative_threshold=relative_threshold, min_length_mm=min_length_mm, V=V, B=B,
+                           initial_directions=initial_directions, key=int(key), chunk=chunk, device=device)
+    key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
     K = int(os.environ.get("DMIPY_TRACT_PHASE", "32")) if phase_steps is None else int(phase_steps)
     if K < 1:
         raise ValueError("phase_steps must be at least 1")

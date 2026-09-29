@@ -7,11 +7,11 @@ is a test oracle, never imported here.
 """
 from .field import FODField
 from .tractogram import Tractogram, STOP_REASONS
-from .tracker import track, RULES
+from .tracker import track, RULES, BACKENDS
 from .seeding import seeds_from_mask
 from .connectivity import connectivity, endpoint_labels
 from .sphere import hemisphere, sh_matrix
 
-__all__ = ['FODField', 'Tractogram', 'STOP_REASONS', 'track', 'RULES', 'seeds_from_mask', 'connectivity',
+__all__ = ['FODField', 'Tractogram', 'STOP_REASONS', 'track', 'RULES', 'BACKENDS', 'seeds_from_mask', 'connectivity',
            'endpoint_labels', 'hemisphere', 'sh_matrix']
 __version__ = '0.1.0.dev0'

@@ -62,9 +62,17 @@ def circle_field(n=40, order=ORDER):
 
 
 # ----------------------------------------------------------------------------------------------------------------
+def jax_uniform(root, i, counter):
+    """The kernel's draw on the JAX backend: ``uniform(fold_in(fold_in(root, i), counter))`` as float32."""
+    return float(jax.random.uniform(jax.random.fold_in(jax.random.fold_in(root, i), counter), dtype=np.float32))
+
+
 def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max_steps, relative_threshold, lane_key,
-                   half_id):
-    """One half, one streamline, the definition step by step in float64 (the RNG calls are the kernel's)."""
+                   half_id, uniform=None):
+    """One half, one streamline, the definition step by step in float64. The RNG calls are the kernel's:
+    ``uniform(counter) -> float32`` draws for this streamline (the JAX stream by default)."""
+    if uniform is None:
+        uniform = lambda counter: float(jax.random.uniform(jax.random.fold_in(lane_key, counter), dtype=np.float32))
     cos_max = np.cos(np.deg2rad(max_angle))
     pts = [np.asarray(pos, np.float64)]
     d = np.asarray(direction, np.float64)
@@ -78,7 +86,7 @@ def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max
             cdf = np.cumsum(w)
             if cdf[-1] <= 0:
                 return np.array(pts), STOP_NO_DIRECTION
-            u = float(jax.random.uniform(jax.random.fold_in(lane_key, 1 + 2 * t + half_id), dtype=np.float32))
+            u = uniform(1 + 2 * t + half_id)
             idx = min(int(np.sum(cdf.astype(np.float32) <= np.float32(u * cdf[-1]))), V.shape[0] - 1)
         else:
             idx = int(np.argmax(w))
@@ -98,14 +106,19 @@ def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max
 
 
 def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angle=30.0, max_steps=500,
-                    relative_threshold=0.1, sphere=None, initial_directions=None, key=0):
-    """The whole definition, per seed, in numpy: a list of ``(points, (reason_f, reason_b))``."""
+                    relative_threshold=0.1, sphere=None, initial_directions=None, key=0, uniform=None):
+    """The whole definition, per seed, in numpy: a list of ``(points, (reason_f, reason_b))``. ``uniform(i, counter)``
+    is the backend's draw for streamline ``i`` (the JAX stream by default; the torch backend's is
+    ``dmipy_tract._torch.uniform``)."""
     V = hemisphere() if sphere is None else np.asarray(sphere, np.float64)
     B = sh_matrix(field.order, V)
     root = jax.random.key(key)
+    if uniform is None:
+        uniform = lambda i, counter: jax_uniform(root, i, counter)
     out = []
     for i, s in enumerate(np.asarray(seeds, np.float64)):
         lane_key = jax.random.fold_in(root, i)
+        draw = lambda counter, i=i: uniform(i, counter)
         if initial_directions is None:
             pmf = B @ field.interpolate(s[None])[0]
             mx = pmf.max()
@@ -114,7 +127,7 @@ def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angl
                 cdf = np.cumsum(pmf)
                 ok = cdf[-1] > 0
                 if ok:
-                    u = float(jax.random.uniform(jax.random.fold_in(lane_key, 0), dtype=np.float32))
+                    u = draw(0)
                     idx = min(int(np.sum(cdf.astype(np.float32) <= np.float32(u * cdf[-1]))), V.shape[0] - 1)
             else:
                 idx = int(np.argmax(pmf))
@@ -129,7 +142,7 @@ def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angl
             out.append((s[None].copy(), (STOP_NO_DIRECTION, STOP_NO_DIRECTION)))
             continue
         kw = dict(rule=rule, step_mm=step_mm, max_angle=max_angle, max_steps=max_steps,
-                  relative_threshold=relative_threshold, lane_key=lane_key)
+                  relative_threshold=relative_threshold, lane_key=lane_key, uniform=draw)
         F, rf = reference_half(field, V, B, s, first, half_id=0, **kw)
         back = -(F[1] - F[0]) / np.linalg.norm(F[1] - F[0]) if len(F) >= 2 else -first
         Bk, rb = reference_half(field, V, B, s, back, half_id=1, **kw)

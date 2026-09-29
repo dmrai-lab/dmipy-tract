@@ -20,6 +20,7 @@ jobs:
           pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git"
           pip install -e ".[test]" --no-deps
           pip install pytest scipy "dipy>=1.12" nibabel
+          pip install torch --index-url https://download.pytorch.org/whl/cpu    # the torch kernel is checked against the JAX one
       - name: Test
         env:
           JAX_PLATFORMS: cpu

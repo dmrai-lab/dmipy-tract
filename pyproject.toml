@@ -17,6 +17,7 @@ dependencies = [
 
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
+torch = ["torch>=2.2"]                 # the torch kernel (dmipy-tract#4), for hosts that run PyTorch only
 test = ["pytest>=7", "scipy>=1.10", "dipy>=1.12", "nibabel>=5.0", "dmipy-fit", "huggingface_hub"]
 
 [tool.setuptools.packages.find]
