@@ -158,89 +158,178 @@ def _compiled_phase(rule, n_coef, n_dirs, K, lanes):
     return jax.jit(phase)
 
 
-_PHASE_LANES_SMALL = 4096
+_LANE_LADDER = (1, 16, 256, 4096, 65536)
 
 
-class _Half:
-    """One half of every streamline, run in phases of ``K`` steps: after each phase only the lanes still active go on,
-    pooled across the whole seed set and padded to 65,536 lanes (or 4,096 when fewer remain), so a phase's cost
-    follows the lanes that are alive rather than the longest one. The points each lane took in a phase come back as
-    a slab; :meth:`scatter` writes them into the ragged output."""
+# ----------------------------------------------------------------------------------------------------------------
+# device-resident state of one batch of seeds, and the fixed-shape helpers that move lanes in and out of a phase
+@functools.lru_cache(maxsize=None)
+def _compiled_select(n_rows, L):
+    """The first ``L`` lanes still to run (row ``n_rows`` is the padding row), and ``remaining`` without them."""
+    def select(remaining):
+        idx = jnp.nonzero(remaining, size=L, fill_value=n_rows)[0]
+        return idx, remaining.at[idx].set(False)
+    return jax.jit(select)
 
-    def __init__(self, n, K, chunk, phase_fn, fold_v, key, static, half_id, max_steps):
-        self.n, self.K, self.chunk, self.phase_fn, self.fold_v, self.key = n, K, chunk, phase_fn, fold_v, key
-        self.static, self.half_id, self.max_steps = static, half_id, max_steps
-        self.count = np.zeros(n, np.int32)
-        self.reason = np.zeros(n, np.int8)
-        self.slabs = []                               # (lane indices, slab (m, kmax, 3), count before, count here)
 
-    def run(self, pos, d, active):
-        """``pos``, ``d`` (n, 3) float32 and ``active`` (n,) bool are updated in place; returns the final ``active``."""
-        f32 = jnp.float32
+@functools.lru_cache(maxsize=None)
+def _compiled_gather(n_rows, L):
+    def gather(pos, d, count, idx):
+        return pos[idx], d[idx], count[idx], idx < n_rows
+    return jax.jit(gather)
+
+
+@functools.lru_cache(maxsize=None)
+def _compiled_update(n_rows, L):
+    def update(pos, d, active, count, reason, idx, pos_o, d_o, act_o, cnt, reason_o):
+        return (pos.at[idx].set(pos_o), d.at[idx].set(d_o), active.at[idx].set(act_o), count.at[idx].add(cnt),
+                reason.at[idx].set(jnp.where(reason_o != 0, reason_o, reason[idx])))
+    return jax.jit(update)
+
+
+@functools.lru_cache(maxsize=None)
+def _compiled_first_point(n_rows, L):
+    """Record the first point a lane took (a slab whose ``before`` is 0), for the backward half's start."""
+    def first_point(first_pt, idx, before, cnt, slab):
+        took = ((before == 0) & (cnt > 0))[:, None]
+        return first_pt.at[idx].set(jnp.where(took, slab[:, 0], first_pt[idx]))
+    return jax.jit(first_point)
+
+
+@functools.lru_cache(maxsize=None)
+def _compiled_scatter(L, K, P, forward):
+    """Write one slab into the ragged ``points (P, 3)``: lane ``i``'s ``j``-th point after the seed goes to
+    ``dest0[i] + 1 + j`` (forward) or ``dest0[i] - 1 - j`` (backward); unused entries go to the dump row ``P - 1``."""
+    def scatter(points, dest0, idx, before, cnt, slab):
+        k = jnp.arange(K, dtype=jnp.int32)
+        j = before[:, None] + k[None, :]
+        dest = dest0[idx][:, None] + (1 + j if forward else -(1 + j))
+        dest = jnp.where(k[None, :] < cnt[:, None], dest, P - 1)
+        return points.at[dest].set(slab)
+    return jax.jit(scatter)
+
+
+@functools.lru_cache(maxsize=None)
+def _compiled_layout(n_rows):
+    """Rows of the ragged output: ``n_pts`` per lane (0 for a lane that never started or the padding row), exclusive
+    offsets, and the seed's row."""
+    def layout(real, cf, cb):
+        n_pts = jnp.where(real, 1 + cf + cb, 0)
+        offsets = jnp.cumsum(n_pts) - n_pts
+        return n_pts, offsets, offsets + cb
+    return jax.jit(layout)
+
+
+@functools.lru_cache(maxsize=None)
+def _compiled_seed_rows(n_rows, P):
+    def seed_rows(points, dest0, real, seeds):
+        return points.at[jnp.where(real, dest0, P - 1)].set(seeds)
+    return jax.jit(seed_rows)
+
+
+class _Batch:
+    """One batch of ``n_rows`` seed lanes (plus a padding row) on the device, tracked half by half in phases of ``K``
+    steps: after each phase only the lanes still active go on, pooled and padded to the smallest of 1, 16, 256, 4,096
+    or ``chunk`` lanes that holds them, so a phase costs what the live lanes cost. Every phase's slab stays on the device; :meth:`join`
+    scatters them into the ragged output there."""
+
+    def __init__(self, n_rows, n_seeds, seeds, first_dir, ok, real, key, offset, K, chunk, max_steps, rule, n_coef,
+                 n_dirs, static):
+        self.n_rows, self.K, self.chunk, self.max_steps = n_rows, K, chunk, max_steps
+        self.lane_floor = min(4096, 1 << max(0, n_seeds - 1).bit_length())      # a small run stays small
+        self.rule, self.n_coef, self.n_dirs, self.static = rule, n_coef, n_dirs, static
+        self.key, self.offset = key, offset
+        self.seeds = seeds                                   # (n_rows + 1, 3) float32, device
+        self.first_dir = first_dir
+        self.ok = ok                                         # has a first direction
+        self.real = real                                     # a seed, not padding
+        self.fold_v = jax.jit(jax.vmap(jax.random.fold_in, in_axes=(None, 0)))
+
+    def half(self, half_id, d0):
+        n1 = self.n_rows + 1
+        pos = self.seeds
+        d = d0
+        active = self.ok
+        count = jnp.zeros(n1, jnp.int32)
+        reason = jnp.zeros(n1, jnp.int8)
+        slabs = []
         t0 = 1
         while t0 < self.max_steps:
-            idx = np.flatnonzero(active)
-            if idx.size == 0:
+            s = int(jnp.sum(active))
+            if s == 0:
                 break
-            lanes = self.chunk if idx.size > _PHASE_LANES_SMALL else min(_PHASE_LANES_SMALL, self.chunk)
-            for s in range(0, idx.size, lanes):
-                sel = idx[s:s + lanes]
-                m = sel.size
-                pad = lanes - m
-                pos_in = jnp.asarray(np.concatenate([pos[sel], np.zeros((pad, 3), np.float32)]))
-                d_in = jnp.asarray(np.concatenate([d[sel], np.zeros((pad, 3), np.float32)]))
-                act_in = jnp.asarray(np.arange(lanes) < m)
-                keys = self.fold_v(self.key, jnp.asarray(np.concatenate([sel, np.zeros(pad, np.int64)]), jnp.uint32))
-                slab, cnt, pos_o, d_o, act_o, reason_o = self.phase_fn(
-                    pos_in, d_in, act_in, keys, jnp.int32(self.half_id), jnp.int32(t0), jnp.int32(self.max_steps),
-                    *self.static)
-                cnt = np.array(cnt)[:m]
-                kmax = int(cnt.max()) if m else 0
-                slab = np.asarray(slab[:m, :kmax])
-                pos[sel] = np.asarray(pos_o)[:m]
-                d[sel] = np.asarray(d_o)[:m]
-                active[sel] = np.asarray(act_o)[:m]
-                reason_o = np.array(reason_o)[:m]
-                self.reason[sel[reason_o != 0]] = reason_o[reason_o != 0]
-                self.slabs.append((sel, slab, self.count[sel].copy(), cnt))
-                self.count[sel] += cnt
+            L = _lanes_for(s, self.chunk, self.lane_floor)
+            select = _compiled_select(self.n_rows, L)
+            gather = _compiled_gather(self.n_rows, L)
+            update = _compiled_update(self.n_rows, L)
+            phase = _compiled_phase(self.rule, self.n_coef, self.n_dirs, self.K, L)
+            remaining = active
+            for _ in range((s + L - 1) // L):
+                idx, remaining = select(remaining)
+                pos_c, d_c, before, act_c = gather(pos, d, count, idx)
+                keys = self.fold_v(self.key, (idx + self.offset).astype(jnp.uint32))
+                slab, cnt, pos_o, d_o, act_o, reason_o = phase(pos_c, d_c, act_c, keys, jnp.int32(half_id),
+                                                                jnp.int32(t0), jnp.int32(self.max_steps), *self.static)
+                pos, d, active, count, reason = update(pos, d, active, count, reason, idx, pos_o, d_o, act_o, cnt,
+                                                       reason_o)
+                slabs.append((L, idx, before, cnt, slab))
             t0 += self.K
-        self.reason[active] = STOP_MAX_STEPS
-        return active
+        reason = jnp.where(active, jnp.int8(STOP_MAX_STEPS), reason)
+        return slabs, count, reason
 
-    def first_step(self, first_dir):
-        """The first point after the seed per lane, or the seed's direction where no step was taken (for the
-        backward half's start)."""
-        out = first_dir.copy()
-        for sel, slab, before, cnt in self.slabs:
-            if slab.shape[1] == 0:
-                continue
-            first = (before == 0) & (cnt > 0)
-            out[sel[first]] = slab[first, 0]
-        return out
+    def first_point(self, slabs):
+        first_pt = self.seeds
+        for L, idx, before, cnt, slab in slabs:
+            first_pt = _compiled_first_point(self.n_rows, L)(first_pt, idx, before, cnt, slab)
+        return first_pt
 
-    def scatter(self, points, dest0, forward):
-        """Write every slab's points into ``points``: lane ``i``'s ``j``-th point (0-based, after the seed) goes to
-        ``dest0[i] + 1 + j`` for the forward half and ``dest0[i] - 1 - j`` for the backward one, ``dest0`` the seed's row."""
-        for sel, slab, before, cnt in self.slabs:
-            total = int(cnt.sum())
-            if total == 0:
-                continue
-            rep = np.repeat(np.arange(sel.size), cnt)
-            k = np.arange(total) - np.repeat(np.cumsum(cnt) - cnt, cnt)
-            j = np.repeat(before, cnt) + k
-            dest = dest0[sel[rep]] + (1 + j if forward else -1 - j)
-            points[dest] = slab[rep, k]
+    def join(self, fwd, bwd):
+        """``(points (total, 3), n_pts (n_rows,))`` on the host: backward points reversed, the seed, forward points."""
+        (slabs_f, cf, _), (slabs_b, cb, _) = fwd, bwd
+        n_pts, offsets, dest0 = _compiled_layout(self.n_rows)(self.real, cf, cb)
+        total = int(jnp.sum(n_pts))
+        P = _points_rows(total)
+        points = jnp.zeros((P, 3), jnp.float32)
+        points = _compiled_seed_rows(self.n_rows, P)(points, dest0, self.real, self.seeds)
+        for forward, slabs in ((True, slabs_f), (False, slabs_b)):
+            for L, idx, before, cnt, slab in slabs:
+                points = _compiled_scatter(L, self.K, P, forward)(points, dest0, idx, before, cnt, slab)
+        return np.asarray(points[:total]), np.asarray(n_pts)[:self.n_rows]
 
 
-def _default_chunk(n):
-    cap = int(os.environ.get("DMIPY_TRACT_CHUNK", "65536"))
-    return max(1, min(cap, 1 << max(0, int(n) - 1).bit_length()))
+_STATE_ROWS = (4096, 65536, 1 << 20)
+
+
+def _lanes_for(s, chunk, floor):
+    """The phase's lane count for ``s`` active lanes: the smallest of 1, 16, 256, 4096, 65536 that holds them, at
+    least ``floor`` and at most ``chunk`` (more lanes than that run in several calls). Few sizes, so few compiles of
+    the phase kernel; the floor keeps a large run to two sizes."""
+    for L in _LANE_LADDER:
+        if s <= L and L >= floor:
+            return min(L, chunk)
+    return min(_LANE_LADDER[-1], chunk)
+
+
+def _state_rows(n):
+    """The smallest of the three state sizes holding ``n`` lanes (three, so that the fixed-shape helpers compile
+    three times at most in a session)."""
+    for r in _STATE_ROWS:
+        if n <= r:
+            return r
+    return _STATE_ROWS[-1]
+
+
+def _points_rows(total):
+    """The ragged output's device size: a power of four from 2**16, plus the dump row."""
+    P = 1 << 16
+    while P < total + 1:
+        P <<= 2
+    return P
 
 
 def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0, max_steps=500,
           relative_threshold=0.1, min_length_mm=0.0, sphere=None, initial_directions=None, key=0, chunk=None,
-          phase_steps=None):
+          phase_steps=None, batch=None):
     """Streamlines from every seed of ``seeds_mm (n, 3)`` (world millimetres) on ``field``.
 
     Parameters
@@ -265,11 +354,14 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     key : int or jax key
         The randomness; an int is a seed.
     chunk : int, optional
-        Lanes per device call (default the smallest power of two holding the seeds, at most
-        ``DMIPY_TRACT_CHUNK`` = 65536); the result does not depend on it.
+        Lanes per phase kernel call (default ``DMIPY_TRACT_CHUNK`` = 65536); the result does not depend on it.
     phase_steps : int, optional
         Steps per phase between compactions of the active lanes (default ``DMIPY_TRACT_PHASE`` = 32); the result
         does not depend on it.
+    batch : int, optional
+        Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device memory
+        (the phase slabs of a batch stay on the device until its streamlines are joined); the result does not
+        depend on it.
     """
     if not isinstance(field, FODField):
         raise TypeError("field must be an FODField")
@@ -299,13 +391,16 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         if initial_directions.shape != (n, 3):
             raise ValueError(f"initial_directions must be ({n}, 3), not {initial_directions.shape}")
     key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
-    chunk = _default_chunk(n) if chunk is None else int(chunk)
+    chunk = int(os.environ.get("DMIPY_TRACT_CHUNK", "65536")) if chunk is None else int(chunk)
     if chunk < 1:
         raise ValueError("chunk must be at least 1")
     K = int(os.environ.get("DMIPY_TRACT_PHASE", "32")) if phase_steps is None else int(phase_steps)
     if K < 1:
         raise ValueError("phase_steps must be at least 1")
     K = min(K, max_steps)
+    batch = int(os.environ.get("DMIPY_TRACT_BATCH", str(1 << 20))) if batch is None else int(batch)
+    if batch < 1:
+        raise ValueError("batch must be at least 1")
 
     f32 = jnp.float32
     dims = jnp.asarray(field.shape, jnp.int32)
@@ -319,18 +414,19 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     static = (field_flat, dims, inv_lin, inv_off, mask_flat, Bd, Vd, jnp.asarray(step_mm, f32),
               jnp.asarray(np.cos(np.deg2rad(max_angle)), f32), jnp.asarray(relative_threshold, f32))
     fold_v = jax.jit(jax.vmap(jax.random.fold_in, in_axes=(None, 0)))
+    seeds32 = seeds.astype(np.float32)
 
     # the first direction of every seed, in chunks
-    seeds32 = seeds.astype(np.float32)
     first_dir = np.zeros((n, 3), np.float32)
     ok = np.zeros(n, bool)
     if initial_directions is None:
-        first_fn = _compiled_first(rule, field.n_coef, n_dirs, chunk)
-        for s in range(0, n, chunk):
-            m = min(chunk, n - s)
-            seed_pos = np.zeros((chunk, 3), np.float32)
+        first_chunk = min(chunk, 1 << max(0, n - 1).bit_length())
+        first_fn = _compiled_first(rule, field.n_coef, n_dirs, first_chunk)
+        for s in range(0, n, first_chunk):
+            m = min(first_chunk, n - s)
+            seed_pos = np.zeros((first_chunk, 3), np.float32)
             seed_pos[:m] = seeds32[s:s + m]
-            keys = fold_v(key, jnp.asarray(np.arange(s, s + chunk), jnp.uint32))
+            keys = fold_v(key, jnp.asarray(np.arange(s, s + first_chunk), jnp.uint32))
             fd, okd = first_fn(jnp.asarray(seed_pos), keys, field_flat, dims, inv_lin, inv_off, Bd, Vd, static[-1])
             first_dir[s:s + m] = np.asarray(fd)[:m]
             ok[s:s + m] = np.asarray(okd)[:m]
@@ -339,42 +435,35 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         ok = nrm > 0
         first_dir[ok] = (initial_directions[ok] / nrm[ok, None]).astype(np.float32)
 
-    phase_fn = {}
-    def phase_for(lanes):
-        if lanes not in phase_fn:
-            phase_fn[lanes] = _compiled_phase(rule, field.n_coef, n_dirs, K, lanes)
-        return phase_fn[lanes]
-
-    class _Dispatch:
-        def __call__(self, pos, d, act, keys, half_id, t0, ms, *st):
-            return phase_for(pos.shape[0])(pos, d, act, keys, half_id, t0, ms, *st)
-
-    halves = []
-    for half_id in (0, 1):
-        h = _Half(n, K, chunk, _Dispatch(), fold_v, key, static, half_id, max_steps)
-        if half_id == 0:
-            d0 = first_dir.copy()
-        else:
-            step1 = halves[0].first_step(seeds32)                  # the first forward point, or the seed itself
-            d0 = step1 - seeds32
-            nrm = np.linalg.norm(d0, axis=1)
-            took = nrm > 0
-            d0[took] = -d0[took] / nrm[took, None]
-            d0[~took] = -first_dir[~took]
-        h.run(seeds32.copy(), d0, ok.copy())
-        halves.append(h)
-    fwd, bwd = halves
-    reason = np.stack([fwd.reason, bwd.reason], axis=1)
-    reason[~ok] = STOP_NO_DIRECTION
-
-    # the ragged output: backward points reversed, the seed, forward points
-    n_pts = 1 + fwd.count + bwd.count
+    parts_points, parts_npts = [], []
+    reason = np.full((n, 2), STOP_NO_DIRECTION, np.int8)
+    batch = min(batch, _state_rows(n))                                  # the state's row count: 4096, 65536 or 2**20
+    for b0 in range(0, n, batch):
+        m = min(batch, n - b0)
+        seeds_b = np.zeros((batch + 1, 3), np.float32)
+        seeds_b[:m] = seeds32[b0:b0 + m]
+        fd_b = np.zeros((batch + 1, 3), np.float32)
+        fd_b[:m] = first_dir[b0:b0 + m]
+        ok_b = np.zeros(batch + 1, bool)
+        ok_b[:m] = ok[b0:b0 + m]
+        real_b = np.arange(batch + 1) < m
+        bt = _Batch(batch, m, jnp.asarray(seeds_b), jnp.asarray(fd_b), jnp.asarray(ok_b), jnp.asarray(real_b), key,
+                    b0, K, chunk, max_steps, rule, field.n_coef, n_dirs, static)
+        fwd = bt.half(0, bt.first_dir)
+        step1 = bt.first_point(fwd[0]) - bt.seeds                       # the first forward step, or zero
+        nrm = jnp.linalg.norm(step1, axis=1)
+        took = nrm > 0
+        d0 = jnp.where(took[:, None], -step1 / jnp.where(took, nrm, 1.0)[:, None], -bt.first_dir)
+        bwd = bt.half(1, d0)
+        pts, n_pts = bt.join(fwd, bwd)
+        parts_points.append(pts)
+        parts_npts.append(n_pts[:m])
+        r = np.stack([np.asarray(fwd[2])[:m], np.asarray(bwd[2])[:m]], axis=1)
+        started = ok[b0:b0 + m]
+        reason[b0:b0 + m][started] = r[started]
+    points = parts_points[0] if len(parts_points) == 1 else np.concatenate(parts_points)
+    n_pts = np.concatenate(parts_npts)
     offsets = np.concatenate([[0], np.cumsum(n_pts)]).astype(np.int64)
-    points = np.empty((int(offsets[-1]), 3), np.float32)
-    seed_row = offsets[:-1] + bwd.count
-    points[seed_row] = seeds32
-    fwd.scatter(points, seed_row, forward=True)
-    bwd.scatter(points, seed_row, forward=False)
     tg = Tractogram(points, offsets, np.arange(n), reason)
     if min_length_mm > 0:
         tg = tg.select((tg.n_points - 1) * step_mm >= min_length_mm)

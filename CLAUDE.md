@@ -8,7 +8,7 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
 |---|---|
 | `dmipy_tract/field.py` | `FODField(sh, affine, mask)`: validation, the clamped trilinear interpolant (numpy), the nearest-voxel mask lookup |
 | `dmipy_tract/sphere.py` | `hemisphere(n)` (Fibonacci, z > 0), `sh_matrix(order, dirs)` = `dmipy_sim.replay.so3.real_sh`, order/count conversions |
-| `dmipy_tract/tracker.py` | `track()`: the first-direction kernel (`_compiled_first`), the phase kernel (`_compiled_phase`, K steps for one lane count), `_Half` (phases, compaction of the active lanes, the slab scatter into the ragged output) |
+| `dmipy_tract/tracker.py` | `track()`: the first-direction kernel (`_compiled_first`), the phase kernel (`_compiled_phase`, K steps for one lane count), `_Batch` (device-resident state of one batch of seeds; phases with compaction of the active lanes; the device-side join of the phase slabs into the ragged output) and its fixed-shape helpers |
 | `dmipy_tract/tractogram.py` | `Tractogram` (ragged points/offsets, seed_index, stop_reason), `.to_tck` via `dmipy_sim.io.strands.write_tck` |
 | `dmipy_tract/seeding.py` | `seeds_from_mask`: dipy's sub-grid construction |
 | `dmipy_tract/connectivity.py` | endpoint labels (nearest voxel) and the count matrix |
@@ -50,9 +50,16 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
   planar field drifts out of plane by up to `n_steps × step × angular_resolution` (the circle test's bound), as
   it does with dipy's hemisphere.
 - Lanes run in phases of `phase_steps` (`DMIPY_TRACT_PHASE`, 32); after each phase only the active lanes go on,
-  pooled over the whole seed set and padded to `chunk` (65,536) or 4,096 lanes. All active lanes stand at the same
-  point index at a phase boundary, so `t0` is one scalar. Compiles: one per (rule, n_coef, n_dirs, K, lane count),
-  three in a normal run; `max_steps` and `half_id` are traced.
+  pooled over the batch and padded to the smallest of 1, 16, 256, 4,096, `chunk` (65,536) lanes that holds them.
+  All active lanes stand at the same point index at a phase boundary, so `t0` is one scalar; `max_steps` and
+  `half_id` are traced.
+- Everything is fixed-shape so that it compiles a bounded number of times: the state rows are 4,096, 65,536 or
+  2**20 (`_state_rows`), the lane count comes from the ladder, the ragged output on the device is a power of four
+  from 2**16 rows (`_points_rows`) plus a dump row that every unused scatter entry targets. A new helper must take
+  its shapes from these ladders, never from `n`; the test suite (many small `n`) is the check, it was 5 minutes of
+  compiles at one point and is 45 s.
+- `real` (a seed, not a padding row) is not `ok` (has a first direction): a seed without a direction is a real
+  one-point streamline and gets its seed row; padding rows get nothing.
 - A phase slab can have zero columns (no lane took a step): guard `slab.shape[1] == 0` before indexing column 0.
 - The JAX CUDA plugin needs the nvidia libraries on `LD_LIBRARY_PATH` in a uv venv (see the L40S notes in the
   memory), else it falls back to CPU silently; `JAX_PLATFORMS=cpu` in `tests/conftest.py` is a default, a GPU run

@@ -7,9 +7,9 @@
  "streamlines": 659840,
  "points": 23075227,
  "n_points_mean": 34.97094295586809,
- "csd_seconds": 9.615032731031533,
- "first_call_seconds": 10.847921593987849,
- "track_seconds": 2.534874173987191,
+ "csd_seconds": 9.885504836041946,
+ "first_call_seconds": 11.366459865996148,
+ "track_seconds": 1.6315980660147034,
  "score": {
   "pearson_count": 0.9271094895106861,
   "pearson_area": 0.928926890186309,
@@ -315,5 +315,5 @@
    0.0
   ]
  ],
- "total_seconds": 26.871119090996217
+ "total_seconds": 26.778496903949417
 }
