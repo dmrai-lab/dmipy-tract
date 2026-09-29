@@ -19,7 +19,9 @@ jobs:
           python -m pip install -U pip
           pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git"
           pip install -e ".[test]" --no-deps
-          pip install pytest scipy "dipy>=1.12" nibabel
+          pip install pytest scipy nibabel
+          # dipy is the test oracle, never a runtime import; 1.12 needs trx-python, which has no 3.10 wheel
+          if [ "${{ matrix.python }}" = "3.10" ]; then pip install "dipy<1.12"; else pip install "dipy>=1.12"; fi
           pip install torch --index-url https://download.pytorch.org/whl/cpu    # the torch kernel is checked against the JAX one
       - name: Test
         env:
