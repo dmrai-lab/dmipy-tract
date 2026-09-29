@@ -297,7 +297,10 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         n_b[no_first] = 1
         reason = np.stack([np.array(r_f)[:m], np.array(r_b)[:m]], axis=1)
         reason[no_first] = STOP_NO_DIRECTION
-        pts, offsets = _join(np.asarray(buf_f)[:m], n_f, np.asarray(buf_b)[:m], n_b)
+        # only the prefix of each buffer that any lane filled leaves the device
+        buf_f = np.asarray(buf_f[:m, :int(n_f.max())])
+        buf_b = np.asarray(buf_b[:m, :int(n_b.max())])
+        pts, offsets = _join(buf_f, n_f, buf_b, n_b)
         part = Tractogram(pts, offsets, lane_index[:m], reason)
         if min_length_mm > 0:
             part = part.select((part.n_points - 1) * step_mm >= min_length_mm)
