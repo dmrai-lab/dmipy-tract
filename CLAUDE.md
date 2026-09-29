@@ -1,203 +1,59 @@
-# dmipy-tract — Agent Rules and Implementation Notes
+# dmipy-tract — rules for agents
 
-This file documents correctness-critical implementation details, known pitfalls, and conventions
-for agents working on dmipy-tract. Read this before touching any propagation, I/O, or filtering
-code.
+Read `README.md` first: it says what the tracker is. This file is what an agent must not get wrong.
 
----
+## What lives where
 
-## RK4 sign convention (critical — read before touching deterministic.py)
-
-### The rule
-
-In `DeterministicTracker._propagate_direction`, the variable `sign` is `+1.0` (forward half)
-or `-1.0` (backward half). **`sign` is applied only to sub-step position offsets and the final
-position update. It is never applied to the k-vectors (k1, k2, k3, k4).**
-
-Correct:
-```python
-k1 = self._get_direction(pos, direction)
-k2 = self._get_direction(pos + sign * 0.5 * self.step_size * k1, k1)
-k3 = self._get_direction(pos + sign * 0.5 * self.step_size * k2, k2)
-k4 = self._get_direction(pos + sign * self.step_size * k3, k3)
-step_dir = (k1 + 2*k2 + 2*k3 + k4) / 6.0
-pos = pos + sign * self.step_size * step_dir
-```
-
-Wrong (do not do this):
-```python
-k2 = sign * self._get_direction(pos + 0.5 * self.step_size * k1, k1)  # BAD
-```
-
-### Why it matters
-
-`_get_direction` receives a reference direction `prev_dir` and flips the retrieved peak if
-`dot(peak, prev_dir) < 0`. This polarity-alignment logic must always see unsigned (non-negated)
-unit vectors. If `sign` is folded into `k_prev`, the flip triggers on the wrong hemisphere and
-the backward half produces step directions that reverse on every sub-step, causing the backward
-streamline to oscillate at the seed point and produce a zero-length or single-point half, which
-gets discarded. The symptom is that all streamlines appear to propagate in only one direction.
-
-### The bug that was fixed
-
-An early prototype had:
-```python
-k2 = self._get_direction(pos + 0.5 * step_size * (sign * k1), sign * k1)
-```
-This silently negated the reference direction on every sub-step evaluation. The curvature
-constraint `dot(peak, prev_dir) < cos_max_angle` would then reject valid peaks, terminating the
-backward half immediately. The fix: leave k-vectors unsigned; multiply by `sign` only when
-computing where to sample the field next.
-
----
-
-## TRK I/O: bbox_valid_check=False required on both save and load
-
-dipy's `save_tractogram` and `load_tractogram` validate that all streamline points lie within
-the bounding box defined by the reference NIfTI header. dmipy-tract streamlines use world-space
-(RASMM) coordinates and may extend slightly outside the bounding box of a minimal reference
-image (especially when a synthetic 1x1x1 dummy header is used). Always pass
-`bbox_valid_check=False`:
-
-```python
-save_tractogram(sft, path, bbox_valid_check=False)   # in save_trk
-sft = load_tractogram(path, "same", bbox_valid_check=False)   # in load_trk
-```
-
-Omitting this flag raises `ValueError: The file ... is not valid` even when the streamlines are
-geometrically correct.
-
-### Nifti1Header dim bug
-
-When constructing a minimal reference image without a real NIfTI source (e.g. to save a
-tractogram without a reference scan), do not attempt to set zooms on a header constructed from
-scratch without first providing data:
-
-```python
-# Correct: construct Nifti1Image with data, THEN set zooms
-ref = nib.Nifti1Image(np.zeros((1, 1, 1), dtype=np.uint8), affine)
-ref.header.set_zooms(voxel_size)
-```
-
-nibabel's `Nifti1Header.set_zooms` requires `dim[0]` (ndim) to be set, which only happens when
-data is attached via `Nifti1Image`. Creating a bare `Nifti1Header()` and calling `set_zooms`
-raises an `AttributeError` or silently sets wrong pixel dimensions.
-
----
-
-## SIFT cost function and algorithm
-
-### SIFT (greedy filtering)
-
-Cost function: `C = sum_v (TDI_v - target_density_v)^2`
-
-The greedy loop in `SIFTFilter.filter()`:
-1. Compute per-streamline voxel contribution maps (sparse: only non-zero voxels).
-2. Initialise `current_tdi = sum of all contributions`.
-3. On each iteration, find the streamline whose removal maximally reduces C.
-4. Remove it, update `current_tdi`, repeat until no removal reduces C.
-
-Time complexity: O(N_streamlines^2 * N_voxels_per_streamline) in the worst case. For large
-tractograms (>100k streamlines), switch to SIFT2 weights.
-
-### SIFT2 (weighted, NNLS)
-
-`SIFTFilter.weights()` builds a dense matrix A of shape `(n_voxels, n_streamlines)` where
-`A[v, i]` is the length contribution of streamline i to voxel v. Solves `min ||Aw - b||^2`
-subject to `w >= 0` using `scipy.optimize.nnls`. Falls back to uniform weights with a
-`RuntimeWarning` if the problem has more than 1,000,000 entries.
-
----
-
-## Fury import: lazy, headless CI uses mocking
-
-Fury is an optional dependency for visualisation. It must be imported **inside** the function
-body, never at module level:
-
-```python
-def plot_tractogram(...):
-    try:
-        import fury.actor as actor
-        import fury.window as window
-    except ImportError as exc:
-        raise ImportError("fury is required ...") from exc
-```
-
-This ensures that importing `dmipy_tract` does not fail on headless servers without fury.
-
-In CI tests, mock fury at the module level:
-```python
-import sys
-from unittest.mock import MagicMock
-sys.modules["fury"] = MagicMock()
-sys.modules["fury.actor"] = MagicMock()
-sys.modules["fury.window"] = MagicMock()
-```
-
-Do not use `pytest.importorskip("fury")` as the primary guard — this skips the test rather than
-verifying that the mock-based code path works.
-
----
-
-## BIDS path structure convention
-
-`save_bids_tractogram` writes to:
-```
-<output_dir>/<subject>/[<session>/]dwi/<subject>[_<session>]_desc-<desc>_<suffix>.trk
-<output_dir>/<subject>/[<session>/]dwi/<subject>[_<session>]_desc-<desc>_<suffix>.json
-```
-
-Example with session:
-```
-derivatives/dmipy-tract/sub-01/ses-01/dwi/sub-01_ses-01_desc-wholebrain_tractography.trk
-```
-
-Example without session:
-```
-derivatives/dmipy-tract/sub-01/dwi/sub-01_desc-wholebrain_tractography.trk
-```
-
-The JSON sidecar contains: `n_streamlines`, `affine`, `TrackerSoftware`, `GeneratedBy`.
-Do not add fields not present in the implementation without updating both the writer and the
-tests.
-
----
-
-## MicrostructureField: peaks_at return shape and principal direction
-
-`MicrostructureField.peaks_at(xyz)` returns `ndarray, shape (K, 3)` where K is the number of
-peaks in the fitted model. **Index 0 is always the principal (dominant) peak direction.**
-`DeterministicTracker` and `StochasticTracker` both use `peaks[0]` as the propagation
-direction.
-
-Peaks are returned as unit vectors (L2-normalised). A zero-length peak is possible at voxels
-where the fitted model did not converge; both trackers guard against this with:
-```python
-if np.all(peaks[0] == 0):
-    break
-```
-
-`parameter_at(name, xyz)` supports only scalar (3-D) parameter maps. Calling it with a
-parameter that has shape `(X, Y, Z, K)` (e.g. a raw peaks array) raises `ValueError`.
-
----
-
-## Stopping criteria parameter names
-
-Default dmipy-core parameter names used by the stopping criteria:
-
-| Criterion | Default parameter_name |
+| file | holds |
 |---|---|
-| VfIcThreshold | `partial_volume_0` |
-| OdiThreshold | `SD1WatsonDistributed_1_odi` |
+| `dmipy_tract/field.py` | `FODField(sh, affine, mask)`: validation, the clamped trilinear interpolant (numpy), the nearest-voxel mask lookup |
+| `dmipy_tract/sphere.py` | `hemisphere(n)` (Fibonacci, z > 0), `sh_matrix(order, dirs)` = `dmipy_sim.replay.so3.real_sh`, order/count conversions |
+| `dmipy_tract/tracker.py` | `track()`: the first-direction kernel (`_compiled_first`), the phase kernel (`_compiled_phase`, K steps for one lane count), `_Half` (phases, compaction of the active lanes, the slab scatter into the ragged output) |
+| `dmipy_tract/tractogram.py` | `Tractogram` (ragged points/offsets, seed_index, stop_reason), `.to_tck` via `dmipy_sim.io.strands.write_tck` |
+| `dmipy_tract/seeding.py` | `seeds_from_mask`: dipy's sub-grid construction |
+| `dmipy_tract/connectivity.py` | endpoint labels (nearest voxel) and the count matrix |
+| `tests/conftest.py` | the constructed fields (uniform, crossing, circle) and `reference_track`, the per-streamline numpy definition |
+| `benchmarks/disco.py` | the DiSCo acceptance; `benchmarks/scaling.py` the brain-scale timing |
 
-These are the dmipy-core conventions for a single-fibre NODDI model. For multi-fibre models or
-non-NODDI compartments, pass `parameter_name` explicitly.
+## Rules
 
----
+- **dipy is an oracle, never a runtime import.** The package imports numpy, jax and dmipy-sim only. Shared
+  mathematics (the SH basis, `.tck`/`.mif`) lives in dmipy-sim, once.
+- **The basis is `so3.real_sh`** (orthonormal, even orders, MRtrix `tournier07` non-legacy). A dipy `shm_coeff` in
+  `descoteaux07` must be converted (`dmipy_sim.replay.fod.FOD.from_sh`) before it becomes an `FODField`; nothing here
+  guesses a basis.
+- **FOD directions are world coordinates** (MRtrix's convention). Tracking is in world millimetres; interpolation
+  and the mask lookup go through the inverse affine. For a scaling-plus-translation affine this is dipy's voxel-axis
+  frame too; under a rotation, dipy's field would need rotating (`so3.rotate_sh`).
+- **The conventions are dipy's, measured, and tested point for point.** Changing any of them breaks
+  `tests/test_dipy_parity.py` by design: a streamline never holds a point outside the domain (the failing step is
+  not taken); the mask is read at `rint` (half to even) of the voxel coordinate; the interpolant is clamped on
+  `[-0.5, N - 0.5]`; the threshold is 10 % of the sphere-wide maximum, applied before the cone; the backward half
+  starts against the forward half's actual first step; the sign of a chosen direction follows `dot > 0`.
+- **Every matmul in the kernel is `Precision.HIGHEST`.** A float32 `jnp.dot` on CUDA is TF32 (10-bit mantissa);
+  amplitudes move at 1e-3 and near-tie choices flip. This bit the ecosystem three times before this package existed.
+- **Randomness is counter-based.** Streamline `i` draws from `fold_in(fold_in(key, i), 1 + 2 t + half)` at step `t`
+  and `fold_in(fold_in(key, i), 0)` for its first direction. Do not thread a key through the loop: the chunk-size
+  invariance test exists to catch that.
+- **Deterministic tests, statistics only for random quantities, floors measured not chosen.** A new mechanism gets a
+  test on a constructed input with a known answer. When the quantity is random, the floor is dipy against itself
+  on jittered seeds (dipy seeds its RNG from the seed's coordinate sum; a regular grid correlates its streamlines).
+- **Declarative docstrings.** What a thing is; no history of what it used to be.
+- **One function per application.** No compatibility spellings; a rename converts every caller.
 
-## Write access for agents
+## Traps
 
-This repo contains runnable tractography code. The implementation lives in `dmipy_tract/`.
-Validation engineers write to `tests/` and `benchmarks/`. See the top-level dmipy
-`CLAUDE.md` for the full write-access policy.
+- `jnp.asarray(device_array)` is read-only on the host; `np.array(...)` before writing into it.
+- `jax.random.uniform` in the kernel is float32; `u * total` with `total` the float32 CDF end. The numpy reference
+  in `tests/conftest.py` mirrors that arithmetic; a float64 reference disagrees at CDF breakpoints.
+- The Fibonacci hemisphere's nearest direction to an in-plane vector has a small positive `z`, so a streamline in a
+  planar field drifts out of plane by up to `n_steps × step × angular_resolution` (the circle test's bound), as
+  it does with dipy's hemisphere.
+- Lanes run in phases of `phase_steps` (`DMIPY_TRACT_PHASE`, 32); after each phase only the active lanes go on,
+  pooled over the whole seed set and padded to `chunk` (65,536) or 4,096 lanes. All active lanes stand at the same
+  point index at a phase boundary, so `t0` is one scalar. Compiles: one per (rule, n_coef, n_dirs, K, lane count),
+  three in a normal run; `max_steps` and `half_id` are traced.
+- A phase slab can have zero columns (no lane took a step): guard `slab.shape[1] == 0` before indexing column 0.
+- The JAX CUDA plugin needs the nvidia libraries on `LD_LIBRARY_PATH` in a uv venv (see the L40S notes in the
+  memory), else it falls back to CPU silently; `JAX_PLATFORMS=cpu` in `tests/conftest.py` is a default, a GPU run
+  sets `JAX_PLATFORMS=cuda`.

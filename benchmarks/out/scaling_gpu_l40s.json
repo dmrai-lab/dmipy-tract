@@ -1,0 +1,32 @@
+{
+ "device": "cuda",
+ "shape": [
+  145,
+  174,
+  145
+ ],
+ "rows": [
+  {
+   "seeds": 100000,
+   "streamlines": 100000,
+   "points": 22708056,
+   "n_points_mean": 227.08056,
+   "first_call_seconds": 5.867223994981032,
+   "seconds": 7.229888527013827,
+   "lane_steps": 22808056,
+   "lane_steps_per_second": 3154689.856528182,
+   "host_rss_gb": 3.648648
+  },
+  {
+   "seeds": 1000000,
+   "streamlines": 1000000,
+   "points": 226886780,
+   "n_points_mean": 226.88678,
+   "first_call_seconds": 0.8248526169918478,
+   "seconds": 17.387478562013712,
+   "lane_steps": 227886780,
+   "lane_steps_per_second": 13106373.025118344,
+   "host_rss_gb": 9.092852
+  }
+ ]
+}

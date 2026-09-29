@@ -1,241 +1,101 @@
 # dmipy-tract
 
-Biophysically-informed tractography and tractometry powered by dmipy-core microstructure models.
-
-dmipy-tract is not just a fiber-tracking library. The tractogram it produces is connected to
-dmipy-core's fitted parameter maps at every step: seeding is driven by intra-cellular volume
-fraction, stopping criteria use NDI and ODI instead of FA or CSD FOD amplitude, SIFT filtering
-uses the model's fiber volume fraction as the target density, and tractometry profiles the same
-parameter maps used for voxel-level analysis along the length of every bundle.
-
----
-
-## Why own tractography?
-
-The current landscape is fragmented:
-
-- **MRtrix3** — excellent tractography, but takes CSD FODs (not biophysical model parameters),
-  separate ecosystem, no Python API for tight integration.
-- **DSI Studio** — proprietary, no open API.
-- **dipy** — basic tractography, no biophysical model integration.
-
-By owning both signal modelling (dmipy-core) and tractography (dmipy-tract), dmrai-lab can:
-
-1. Feed fitted biophysical parameters (NDI, ODI, axon diameter) directly into stopping criteria
-   and SIFT target density — no file conversion, no format mismatch.
-2. Validate tractography against the same MC simulation engine (dmipy-sim) that validates signal
-   models.
-3. Use SIFT2 weights driven by the actual biophysical model's fiber volume fraction, not generic
-   FOD amplitude.
-4. Profile microstructure along tracts using the exact same parameter maps used for voxel-level
-   analysis.
-
----
-
-## File map
-
-```
-dmipy_tract/
-  core/
-    field.py              — MicrostructureField: wraps a fitted dmipy-core model; provides
-                            peaks_at(pos) and parameter_at(name, pos) at any world-space coord
-    seeding.py            — seeds_from_mask, seeds_from_vf_ic: seed generation strategies
-    stopping_criteria.py  — VfIcThreshold, OdiThreshold, BoundaryStop, CompositeStopping,
-                            default_stopping: biophysically-informed stopping
-  propagation/
-    deterministic.py      — DeterministicTracker: RK4 peak tracking, bidirectional
-    stochastic.py         — StochasticTracker: Euler + vMF angular perturbation
-  filtering/
-    sift.py               — SIFTFilter: greedy SIFT + SIFT2 NNLS weights
-    tdi.py                — compute_tdi: length-weighted Track Density Image
-  tractometry/
-    profile.py            — along_tract_profile: arc-length interpolation of parameter maps
-  io/
-    tractogram_io.py      — save_trk, load_trk (dipy-backed, bbox_valid_check=False)
-    bids_export.py        — save_bids_tractogram: BIDS-derivatives .trk + JSON sidecar
-  vis/
-    tractogram_viewer.py  — plot_tractogram: fury-based viewer, PNG or interactive
-  connectivity/
-    __init__.py           — (Phase 4: connectivity matrix)
-
-tests/
-  test_deterministic_tracker.py
-  test_stochastic_tracker.py
-  test_microstructure_field.py
-  test_seeding.py
-  test_tractogram_io.py
-  test_end_to_end.py
-  test_viewer.py
-  test_sift_stub.py
-  test_sift.py
-  test_tdi.py
-  test_bids_export.py
-  test_tractometry.py
-```
-
----
-
-## Key concepts
-
-### RK4 deterministic tracking
-
-`DeterministicTracker` propagates along the principal orientation peak using a 4th-order
-Runge-Kutta integrator. At each step, four sub-step evaluations (k1..k4) sample the peak field
-at intermediate positions, and the weighted average `(k1 + 2k2 + 2k3 + k4) / 6` gives the
-final step direction. RK4 substantially reduces trajectory error compared to Euler integration
-on the same step size, especially in high-curvature regions (e.g., the u-fibres of the
-cingulum). Propagation is bidirectional: two half-streamlines are grown in opposite directions
-from each seed, then concatenated.
-
-**Sign convention**: `sign` (+1 for forward, -1 for backward) is applied only to the sub-step
-position offsets and the final position update. It is never applied to the k-vectors themselves.
-The direction-flip logic inside `_get_direction` operates on unsigned unit vectors, then the
-caller multiplies by `sign` when computing the sub-step offset. Applying `sign` to the k-vectors
-directly causes the flip logic to see a negated direction on every sub-step evaluation, which
-breaks bidirectional propagation. See `CLAUDE.md` for full details.
-
-### Stochastic tracking
-
-`StochasticTracker` uses Euler integration (RK1) with von Mises-Fisher (vMF) angular
-perturbation at each step. The peak direction at the current position is used as the vMF mean
-`mu`; a sample is drawn by rotating `mu` by a random angle whose standard deviation is
-`arctan(1/sqrt(kappa))`. High `kappa` (e.g. 100) produces near-deterministic behaviour; low
-`kappa` (e.g. 10) produces wide angular dispersion. Multiple streamlines per seed
-(`n_streamlines_per_seed`, default 3) are generated to sample the orientation uncertainty.
-Stochastic tracking is preferred when crossing fibres or noisy data make a single deterministic
-path unreliable, or when downstream analysis (COMMIT, Bayesian connectivity) requires a
-distribution of plausible paths.
-
-### SIFT — Spherical-deconvolution Informed Filtering of Tractograms
-
-After tractography, the raw tractogram overrepresents long, straight fibres and underrepresents
-short or curved ones. SIFT (Smith et al. 2013) corrects this by removing streamlines whose
-removal reduces the global cost `C = sum_v (TDI_v - target_density_v)^2`, where `TDI` is the
-Track Density Image and `target_density` is the model-predicted fiber density per voxel
-(typically: `vf_ic * voxel_volume / mean_streamline_length`). The greedy implementation in
-`SIFTFilter.filter()` iterates until no single removal reduces cost. SIFT2 (`SIFTFilter.weights()`)
-instead assigns non-negative scalar weights to each streamline via NNLS, preserving all
-streamlines while achieving the same density match.
-
-### TDI — Track Density Image
-
-`compute_tdi` accumulates length-weighted contributions of each streamline segment into a 3-D
-volume. Each segment is sub-sampled along its length (at twice voxel resolution) and each sample
-contributes `segment_length_mm / n_samples` to its nearest voxel. The result is a map whose
-units are mm of fibre length per voxel, which is proportional to fiber volume fraction at the
-voxel scale. TDI is the primary quantity matched by SIFT.
-
-### Tractometry
-
-`along_tract_profile` resamples each streamline to `n_points` equally-spaced arc-length
-positions (normalised to [0, 1]), queries `MicrostructureField.parameter_at` at each position,
-then returns the bundle-mean and standard-deviation profile across all streamlines. Optional
-per-streamline weights (e.g. from SIFT2) allow weighted averaging. Any scalar parameter in the
-fitted model can be profiled: NDI, ODI, axon diameter, diffusivity.
-
----
-
-## RK4 sign convention
-
-This is a subtle but critical correctness point documented here explicitly.
-
-In `DeterministicTracker._propagate_direction`, `sign` is `+1.0` (forward) or `-1.0`
-(backward). The sign is applied **only** to position offsets and the final position update:
+Streamline tractography on FOD fields, batched on the JAX device. One data model, one tracker, one output:
 
 ```python
-k2 = self._get_direction(pos + sign * 0.5 * step_size * k1, k1)
-k3 = self._get_direction(pos + sign * 0.5 * step_size * k2, k2)
-k4 = self._get_direction(pos + sign * step_size * k3, k3)
-pos = pos + sign * step_size * step_dir
+from dmipy_tract import FODField, seeds_from_mask, track, connectivity
+
+field = FODField(sh, affine, mask)                     # (X, Y, Z, n_coef) SH in dmipy-sim's basis, voxel->mm, domain
+seeds = seeds_from_mask(rois > 0, affine, density=4)   # (n, 3) mm, dipy's construction
+tg = track(field, seeds, rule='probabilistic', step_mm=0.5, max_angle=30.0, key=0)
+matrix, ends = connectivity(tg, rois, affine)          # streamline counts between regions
+tg.to_tck("tracks.tck")                                # MRtrix format, through dmipy-sim
 ```
 
-`_get_direction` receives the reference direction (`k_prev`) as an unsigned unit vector and
-flips the retrieved peak if it points away from `k_prev`. This flip logic must always see an
-unsigned direction; multiplying `k1/k2/k3` by `sign` before passing them to `_get_direction`
-would cause the flip to trigger on the wrong side, producing step directions that oscillate
-rather than following the fibre.
+`FODField.from_mif("wmfod.mif")` reads an MRtrix FOD; a dmipy-fit `csd_tournier07_jax` fit's `sh_coeff` is the
+same basis, no conversion. DiSCo, the BATMAN brain and an HCP subject are the same input; the seeding density,
+not the grid, sets the time.
 
-**The bug**: an earlier version applied `sign` inside the k-vector computation as
-`k2 = sign * _get_direction(pos + ...)`, which silently negated the curvature-flip reference,
-causing the backward half to spin and produce a single-point or zero-length streamline.
+## What the tracker is
 
----
+The two direction rules every reference has, on one lockstep kernel (`jax.lax.while_loop` over steps, `vmap` over
+seeds, chunks of 65,536 lanes):
 
-## Quick start
+- **probabilistic**: the FOD interpolated trilinearly on its coefficients and evaluated on a 362-direction
+  hemisphere, amplitudes below 10 % of the sphere-wide maximum set to zero, restricted to the cone of `max_angle`
+  around the previous direction, sampled by inverse CDF (dipy's `ProbabilisticDirectionGetter`);
+- **deterministic**: the maximum inside the cone (dipy's `DeterministicMaximumDirectionGetter`).
 
-From a fitted dmipy-core model to a BIDS tractogram in 15 lines:
+The first direction at a seed is drawn from the FOD on the whole sphere; the backward half starts against the
+forward half's actual first step; the streamline is the backward half reversed followed by the forward half, with
+the seed once. A step whose landing point has its nearest voxel outside the mask or the grid is not taken and ends
+the half with that reason (`stop_reason`); no direction above the threshold inside the cone ends it too; `max_steps`
+points per half is the cap. These are dipy's `LocalTracking` conventions, measured on constructed fields, so the
+deterministic rule reproduces dipy point for point (a test).
 
-```python
-import nibabel as nib
-from dmipy_tract.core.field import MicrostructureField
-from dmipy_tract.core.seeding import seeds_from_vf_ic
-from dmipy_tract.propagation.deterministic import DeterministicTracker
-from dmipy_tract.io.bids_export import save_bids_tractogram
+Randomness is counter-based (`fold_in(fold_in(key, seed_index), step)`): streamline `i` is a function of the key,
+seed `i` and the field, not of the chunk size or the device. Positions are float32 millimetres; every matrix product
+is at `Precision.HIGHEST` (a float32 matmul on CUDA is TF32 otherwise).
 
-# result: FittedMultiCompartmentModel from dmipy-core
-ref = nib.load("sub-01_dwi.nii.gz")
-field = MicrostructureField.from_fitted_model(result, ref.affine)
+## Measured
 
-seeds = seeds_from_vf_ic(field, vf_ic_threshold=0.3, density=2)
+The DiSCo acceptance (`benchmarks/disco.py`, `benchmarks/out/`): the reference replay volume, CSD with dmipy-fit's
+`csd_tournier07_jax` (order 8, the single-fibre response, 9 s), 659,840 seeds (density 4 in the 16 regions, 64 per
+voxel), step 0.5, 30°, 500 steps per half. All 120 region pairs come out connected in every pipeline (25 true, 95
+false, 0 missed), as in the published dipy runs.
 
-tracker = DeterministicTracker(field, step_size_mm=0.5, max_angle_deg=30)
-streamlines = tracker.track(seeds)
+| tracker | streamlines | Pearson vs strand count | vs area | tracking |
+|---|---|---|---|---|
+| this package, L40S | 659,840 | **0.927** | 0.929 | **2.5 s** steady, 10.8 s first call (compile) |
+| this package, CPU (16 of 72 cores, shared box, before compaction) | 659,840 | 0.927 | 0.929 | 659 s |
+| dipy `LocalTracking` on the same FOD and seeds, L40S host | 2,822,911 (one per FOD peak per seed) | 0.917 | 0.917 | 1016 s |
+| the replay paper's dipy pipeline (dipy CSD), dmipy-sim#505 | 1.6 M | 0.904 – 0.912 | | 250 – 500 s |
 
-trk_path = save_bids_tractogram(
-    streamlines, ref.affine,
-    reference_nifti_path="sub-01_dwi.nii.gz",
-    output_dir="derivatives/dmipy-tract",
-    subject="sub-01",
-)
-print(f"Saved {len(streamlines)} streamlines to {trk_path}")
+The two connectivity matrices (this tracker and dipy on the same field) correlate at 0.997. CPU and GPU tractograms
+are bit-identical (lengths, stop reasons and positions), and so are tractograms at any chunk size or phase length.
+
+Where the 2.5 s go (`benchmarks/profile_track.py`, L40S): the phase kernels 0.9 s (40 calls at 65,536 or 4,096 lanes,
+phases of 32 steps between compactions of the active lanes), the ragged scatter on the host 0.9 s, host state and
+transfers 0.7 s. Before compaction the kernels alone took 6.5 s, because each chunk ran to its longest lane (266 steps
+for a mean streamline of 35 points). The kernel does 6.6e7 lane-steps/s flat out (1 ms per iteration of 65,536 lanes at
+order 8 on 362 directions), insensitive to the rule, the sphere size and the order (`benchmarks/ablate2.py`): it is
+gather-bound on the field, as designed. Phase lengths 16 and 32 measure the same; 64 costs 1 s more.
+
+Brain scale (`benchmarks/scaling.py`, a 145 × 174 × 145 order-8 field, streamlines of 227 points, L40S):
+
+| seeds | tracking | host RSS |
+|---|---|---|
+| 10⁵ | 7.2 s | 3.6 GB |
+| 10⁶ | 17 s | 9.1 GB |
+| 10⁷ | the output itself is 2.3 × 10⁹ points (27 GB float32): not a case for an in-memory tractogram | |
+
+At brain scale the host side (the ragged scatter, three passes over the points) is most of the time; the three
+scatter formulations tried run within 5 % of each other on the host, so the next gain is a device-side join with a
+streaming `.tck` writer, which also covers 10⁷ seeds. The first call pays about 8 s of compile for the three kernel
+shapes; a persistent compile cache is the other pending item.
+
+## Tests
+
+`pytest tests -q` (CPU, about a minute; dipy is a test dependency, never imported by the package). Every mechanism has
+a deterministic test on constructed inputs: interpolation against closed forms and `scipy.ndimage.map_coordinates`;
+the basis against a delta on every sphere direction and against dipy's `tournier07`; the inverse-CDF sampler at every
+breakpoint; stopping exhaustive over seed positions and over the four reasons; the bidirectional join; the deterministic
+rule on concentric circles to the sphere's angular-resolution bound; key, chunk-size, rigid-affine and isotropic-scale
+invariances; refusals by name. The batched kernel is checked against a per-streamline numpy tracker of the same
+definition, then against dipy: point for point for the deterministic rule (uniform, crossing and circle fields, a
+scaled affine), and for the probabilistic rule within dipy's own scatter (endpoint-density Dice and region-pair
+fractions, with the floor measured from dipy against itself on jittered seeds: dipy seeds its per-streamline RNG
+from the seed's coordinate sum, so a regular seed grid shares random streams within a run).
+
+## Not in v0
+
+PTT, anatomically constrained stopping (5TT), SIFT/SIFT2, TDI, tractometry, learned trackers: all reachable on the
+same kernel and the same `Tractogram`, none of them here.
+
+## Install
+
 ```
-
-The resulting file lands at:
-`derivatives/dmipy-tract/sub-01/dwi/sub-01_desc-wholebrain_tractography.trk`
-
----
-
-## Viewer
-
-`plot_tractogram` accepts a per-streamline scalar array for colour-coding:
-
-```python
-from dmipy_tract.vis.tractogram_viewer import plot_tractogram
-from dmipy_tract.tractometry.profile import along_tract_profile
-
-positions, ndi_mean, ndi_std = along_tract_profile(
-    streamlines, field, "partial_volume_0"
-)
-
-# Per-streamline mean NDI (index 0 = start, -1 = end)
-per_sl_ndi = [field.parameter_at("partial_volume_0", sl[len(sl)//2]) for sl in streamlines]
-
-plot_tractogram(streamlines, scalar_map=per_sl_ndi, colormap="hot", output_file="tract_ndi.png")
+pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git"
+pip install -e .            # CPU; pip install -e ".[cuda]" for a CUDA device
+pip install -e ".[test]"    # dipy, scipy, nibabel, dmipy-fit, huggingface_hub for the tests and benchmarks
 ```
-
-For interactive viewing, omit `output_file`. In CI/headless environments, pass `output_file`
-to write a PNG via off-screen rendering (fury uses OSMesa when a display is unavailable).
-
----
-
-## Installation
-
-```bash
-pip install -e ".[dev]"
-```
-
-Requires Python >= 3.10. Core dependencies: numpy, scipy, nibabel, dipy.
-Optional: fury (visualisation), dmipy-core (full biophysical model integration).
-
----
-
-## Running tests
-
-```bash
-/home/rutger/dmipy-core/.venv/bin/python -m pytest tests/
-```
-
-## Documentation
-- [`docs/faq.md`](docs/faq.md) — 20 frequently asked questions
-- [`docs/architecture.md`](docs/architecture.md) — pipeline diagram and module responsibilities
-- [`docs/rk4_and_sign_convention.md`](docs/rk4_and_sign_convention.md) — RK4 implementation and the sign convention
