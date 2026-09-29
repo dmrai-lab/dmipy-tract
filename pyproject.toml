@@ -7,7 +7,7 @@ name = "dmipy-tract"
 version = "0.1.0.dev0"
 description = "Streamline tractography on FOD fields, batched on the JAX device"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 dependencies = [
     "numpy>=1.24",
