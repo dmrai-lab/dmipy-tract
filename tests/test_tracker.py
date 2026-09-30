@@ -11,6 +11,7 @@ import jax.numpy as jnp
 from dmipy_sim.replay.so3 import rotate_sh
 
 from dmipy_tract import FODField, track, hemisphere, sh_matrix
+from dmipy_tract.tracker import _index, _sample
 from dmipy_tract.tractogram import STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 from conftest import uniform_field, crossing_field, circle_field, delta_sh, reference_track
 
@@ -224,7 +225,8 @@ def test_isotropic_scaling_scales_the_streamlines(backend, cross):
 def test_first_direction_is_sampled_from_the_thresholded_fod(backend):
     """Many seeds at one crossing position: the histogram of first directions over the sphere equals the thresholded
     FOD's mass per direction to a 4 sigma binomial band, exhaustively over the directions (a delta FOD's sample is
-    its direction, the degenerate case, comes free at the directions of zero mass)."""
+    its direction, the degenerate case, comes free at the directions of zero mass). The 4 sigma band is chosen, not
+    measured; under the fixed key the draws, and so the outcome, are the same on every run."""
     f, _, crossing = crossing_field()
     V = hemisphere(362)
     B = sh_matrix(f.order, V)
@@ -251,7 +253,6 @@ def test_inverse_cdf_index_is_the_analytic_one_at_every_breakpoint_and_midpoint(
     """``_index`` itself, on integer weights summing to 256 (every CDF entry and every ``u * total`` below is exact in
     float32): a ``u`` inside bin ``i`` lands in ``i``, a ``u`` exactly on the breakpoint below a positive bin lands in
     that bin and not in the zero-mass entries before it (``cdf <= u total``; ``<`` would land on the plateau)."""
-    from dmipy_tract.tracker import _index, _sample
     rng = np.random.default_rng(0)
     w = (rng.integers(1, 9, 50) * (rng.random(50) > 0.3)).astype(np.float32)   # zeros interleaved: CDF plateaus
     w[0] = 0.0

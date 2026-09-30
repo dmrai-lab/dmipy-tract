@@ -5,7 +5,8 @@ The two direction rules every reference has, on one kernel:
 * ``probabilistic``: the FOD interpolated at the position (coefficients, then evaluated on the sphere), amplitudes
   below ``relative_threshold`` times the sphere-wide maximum set to zero, restricted to the directions within
   ``max_angle`` of the previous one, sampled by inverse CDF (dipy's ``ProbabilisticDirectionGetter``, MRtrix's
-  iFOD1 up to its rejection sampler and its lack of a threshold);
+  iFOD1 up to its rejection sampler and its threshold, ``tckgen -cutoff``, an absolute amplitude where this one is
+  relative to the maximum);
 * ``deterministic``: the same amplitudes, their maximum inside the cone (dipy's ``DeterministicMaximumDirectionGetter``,
   MRtrix's SD_STREAM up to interpolation).
 
@@ -19,7 +20,8 @@ measured on constructed fields (a streamline never holds a point outside the dom
 
 Randomness is counter-based: the draw at (seed ``i``, half ``h``, step ``t``) comes from
 ``fold_in(fold_in(key, i), 1 + 2 t + h)`` (``fold_in(fold_in(key, i), 0)`` for the first direction), so streamline ``i``
-is a function of the key, seed ``i`` and the field alone: not of the chunk size, the other seeds or the device.
+is a function of the key, seed ``i`` and the field alone: not of the chunk size, the phase length, the batch or the
+other seeds. ``i`` enters ``fold_in`` as a uint32, so one call tracks at most 2**32 seeds.
 Positions are float32 millimetres on the device; every matrix product is at ``Precision.HIGHEST`` (a float32 matmul
 on CUDA is TF32 otherwise, which moves amplitudes at 1e-3 and flips near-tie choices).
 """
@@ -363,13 +365,15 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         depend on it. A batch is at most the state size that holds all ``n`` seeds (4,096, 65,536 or 2**20
         rows), so a larger value runs as that size.
     backend : 'jax' | 'torch'
-        The kernel (dmipy-tract#4): the JAX one (the reference), or :mod:`dmipy_tract._torch` for hosts that run
+        The kernel: the JAX one (the reference), or :mod:`dmipy_tract._torch` for hosts that run
         PyTorch only. The conventions are the same; the probabilistic draws come from each backend's own
         counter-based stream, so the two give different, equally valid tractograms, each independent of ``chunk``.
     device : optional
         Torch backend only. The torch device (the current CUDA device when one exists, else the CPU).
 
     Every argument is validated before the backend runs; an argument of the other backend is refused by name.
+    A seed is tracked wherever it lies: one outside the mask (or the grid) gets its first direction from the FOD
+    there, and its streamline goes on when its first landing point's nearest voxel is inside the mask.
 
     Returns
     -------

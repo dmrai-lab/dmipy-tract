@@ -1,4 +1,4 @@
-"""The tracker's kernel in PyTorch (dmipy-tract#4): the same conventions as :mod:`dmipy_tract.tracker`, eager, for
+"""The tracker's kernel in PyTorch: the same conventions as :mod:`dmipy_tract.tracker`, eager, for
 hosts that run PyTorch only (Hugging Face's shared GPU pool, where the device exists only inside a call).
 
 One step of one half for every active lane at once, the lanes in chunks: the FOD interpolated at the position
@@ -110,6 +110,7 @@ class _Field:
         self.corners = c                                                                         # (8, 3)
 
     def voxel(self, pos):
+        """World positions ``(a, 3)`` to continuous voxel coordinates."""
         return pos @ self.inv_lin_T + self.inv_off
 
     def interpolate(self, pos):
@@ -147,6 +148,7 @@ class _Field:
         return idx, w.gather(1, idx[:, None])[:, 0] > 0
 
     def mask_at(self, pos):
+        """``(in_grid, in_mask)`` of the nearest voxel (round half to even) of world positions ``pos (a, 3)``."""
         import torch
         iv = torch.round(self.voxel(pos)).long()
         in_grid = ((iv >= 0) & (iv < self.dims)).all(1)

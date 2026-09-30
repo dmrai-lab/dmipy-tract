@@ -7,7 +7,8 @@ import numpy as np
 __all__ = ['Tractogram', 'STOP_REASONS', 'STOP_NONE', 'STOP_MASK', 'STOP_OUTSIDE', 'STOP_NO_DIRECTION',
            'STOP_MAX_STEPS']
 
-STOP_NONE = 0            # the half never started (a padded lane)
+STOP_NONE = 0            # the value a half's reason starts from in the kernels (padded lanes, seeds without a first
+                         # direction); never in a returned Tractogram, where such a seed's halves are STOP_NO_DIRECTION
 STOP_MASK = 1            # the next point's nearest voxel is outside the mask
 STOP_OUTSIDE = 2         # the next point's nearest voxel is outside the grid
 STOP_NO_DIRECTION = 3    # no direction inside the cone above the threshold (or the FOD is not defined here)
@@ -98,6 +99,8 @@ class Tractogram:
 
     @classmethod
     def concatenate(cls, parts):
+        """One tractogram of the streamlines of ``parts`` in order, with their seed indices and stop reasons; empty
+        for no parts."""
         parts = list(parts)
         if not parts:
             return cls(np.zeros((0, 3), np.float32), np.zeros(1, np.int64), np.zeros(0, np.int64),

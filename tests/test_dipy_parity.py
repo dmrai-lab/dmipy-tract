@@ -143,6 +143,10 @@ def test_probabilistic_rule_matches_dipy_within_dipy_own_scatter():
     The seeds are jittered inside their voxels: dipy seeds its per-streamline RNG from the seed's coordinate sum,
     so seeds on a regular grid share random streams within a run (translates of one streamline), which raises
     dipy's agreement with itself above what independent draws give (measured: 0.80 against 0.76).
+
+    The floors are dipy's, measured; the margins on them (0.02 on the Dice, the wider of twice dipy's spread and a
+    4 sigma band on the pair fractions) are chosen. Under the fixed keys and seeds every draw on both sides, and so
+    the outcome, is the same on every run.
     """
     field, labels, crossing = crossing_field()
     base = np.argwhere(crossing).astype(float)
