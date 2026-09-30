@@ -9,6 +9,7 @@ import pytest
 import jax
 
 from dmipy_tract import FODField, sh_matrix, hemisphere
+from dmipy_tract.field import nearest_voxel
 from dmipy_tract.tracker import _counter
 from dmipy_tract.tractogram import STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
@@ -95,11 +96,9 @@ def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max
                 return np.array(pts), STOP_NO_DIRECTION
         nd = V[idx] if V[idx] @ d > 0 else -V[idx]
         new = pts[-1] + step_mm * nd
-        v = field.voxel_from_world(new[None])[0]
-        iv = np.rint(v).astype(int)
-        if np.any(iv < 0) or np.any(iv >= np.asarray(field.shape)):
+        if not nearest_voxel(new, field.affine, field.shape)[1]:
             return np.array(pts), STOP_OUTSIDE
-        if not field.mask[tuple(iv)]:
+        if not field.in_mask(new):
             return np.array(pts), STOP_MASK
         pts.append(new)
         d = nd

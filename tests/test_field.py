@@ -6,7 +6,7 @@ import jax.numpy as jnp
 from scipy.ndimage import map_coordinates
 
 from dmipy_tract import FODField
-from dmipy_tract.field import trilinear_indices
+from dmipy_tract.field import _trilinear_indices, nearest_voxel
 from dmipy_tract.tracker import _interpolate
 
 
@@ -106,7 +106,7 @@ def test_outer_half_voxel_extends_the_edge_value_and_beyond_is_zero():
 
 
 def test_trilinear_indices_weights_sum_to_one_and_stay_in_grid():
-    idx, w, inside = trilinear_indices(np.random.default_rng(2).uniform(-1, 9, (500, 3)), (6, 7, 8))
+    idx, w, inside = _trilinear_indices(np.random.default_rng(2).uniform(-1, 9, (500, 3)), (6, 7, 8))
     np.testing.assert_allclose(w.sum(1), 1.0, atol=1e-12)
     assert idx.min() >= 0 and np.all(idx.max(axis=(0, 1)) <= np.array([5, 6, 7]))
 
@@ -140,3 +140,16 @@ def test_mask_lookup_is_nearest_voxel_with_round_half_to_even():
     pts = np.array([[6.49, 0, 0], [6.5, 0, 0], [6.51, 0, 0], [-0.5, 0, 0], [-0.51, 0, 0], [9.5, 0, 0], [0, 0, 8.5]])
     #                    in      6.5->6 in   7 out      -0.5->0 in   out    9.5->10 out    8.5->8 in
     np.testing.assert_array_equal(f.in_mask(pts), [True, True, False, True, False, False, True])
+    idx, in_grid = nearest_voxel(pts, f.affine, f.shape)
+    np.testing.assert_array_equal(in_grid, [True, True, True, True, False, False, True])
+    np.testing.assert_array_equal(idx, [[6, 0, 0], [6, 0, 0], [7, 0, 0], [0, 0, 0], [0, 0, 0], [9, 0, 0], [0, 0, 8]])
+
+
+def test_nearest_voxel_goes_through_the_affine_and_keeps_the_leading_shape():
+    A = np.diag([2.0, 1.0, 1.0, 1.0])
+    A[:3, 3] = [1.0, 0.0, 0.0]
+    pts = np.array([[[4.0, 1, 1], [6.0, 1, 1]], [[-0.1, 1, 1], [8.1, 1, 1]]])    # voxel x 1.5, 2.5, -0.55, 3.55
+    idx, in_grid = nearest_voxel(pts, A, (4, 4, 4))
+    assert idx.shape == (2, 2, 3) and in_grid.shape == (2, 2)
+    np.testing.assert_array_equal(idx[..., 0], [[2, 2], [0, 3]])
+    np.testing.assert_array_equal(in_grid, [[True, True], [False, False]])

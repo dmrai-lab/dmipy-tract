@@ -13,6 +13,7 @@ from dipy.direction import DeterministicMaximumDirectionGetter, ProbabilisticDir
 from dipy.tracking.stopping_criterion import BinaryStoppingCriterion
 
 from dmipy_tract import FODField, track, sh_matrix, connectivity
+from dmipy_tract.field import nearest_voxel
 from dmipy_tract.tractogram import STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 from conftest import uniform_field, crossing_field, circle_field
 
@@ -112,8 +113,7 @@ def test_probabilistic_rule_equals_dipy_where_there_is_nothing_to_sample():
 # ------------------------------------------------------------------ 11. statistical parity, probabilistic rule
 def endpoint_density(streamlines, shape):
     img = np.zeros(shape, np.int64)
-    ends = np.concatenate([s[[0, -1]] for s in streamlines])
-    v = np.clip(np.rint(ends).astype(int), 0, np.asarray(shape) - 1)
+    v, _ = nearest_voxel(np.concatenate([s[[0, -1]] for s in streamlines]), np.eye(4), shape)
     np.add.at(img, (v[:, 0], v[:, 1], v[:, 2]), 1)
     return img
 
@@ -124,10 +124,8 @@ def weighted_dice(a, b):
 
 def pair_fractions(streamlines, labels):
     """Of the streamlines whose two ends lie in regions, the fraction per unordered region pair."""
-    ends = np.array([[labels[tuple(np.clip(np.rint(s[0]).astype(int), 0, np.asarray(labels.shape) - 1))],
-                      labels[tuple(np.clip(np.rint(s[-1]).astype(int), 0, np.asarray(labels.shape) - 1))]]
-                     for s in streamlines])
-    ends = np.sort(ends, axis=1)
+    idx, in_grid = nearest_voxel(np.array([s[[0, -1]] for s in streamlines]), np.eye(4), labels.shape)
+    ends = np.sort(np.where(in_grid, labels[idx[..., 0], idx[..., 1], idx[..., 2]], 0), axis=1)
     ok = np.all(ends > 0, axis=1)
     pairs = {(1, 2): 0, (3, 4): 0, (1, 3): 0, (1, 4): 0, (2, 3): 0, (2, 4): 0}
     for a, b in ends[ok]:

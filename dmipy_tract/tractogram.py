@@ -65,11 +65,9 @@ class Tractogram:
     @property
     def lengths_mm(self):
         """Arc length per streamline, ``(n,)``, the sum of its segment lengths."""
-        seg = np.linalg.norm(np.diff(self.points, axis=0).astype(np.float64), axis=1)
-        keep = np.ones(seg.shape[0], bool)
-        keep[self.offsets[1:-1] - 1] = False          # the join between consecutive streamlines is no segment
-        seg = seg * keep
-        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        seg = np.linalg.norm(np.diff(self.points, axis=0), axis=1)          # float32 segments
+        seg[self.offsets[1:-1] - 1] = 0.0             # the join between consecutive streamlines is no segment
+        cum = np.concatenate([[0.0], np.cumsum(seg, dtype=np.float64)])
         starts = self.offsets[:-1]
         ends = self.offsets[1:] - 1
         return cum[ends] - cum[starts]

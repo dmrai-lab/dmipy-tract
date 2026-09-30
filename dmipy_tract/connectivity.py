@@ -1,6 +1,8 @@
 """Streamline counts between labelled regions, from the two endpoints of every streamline."""
 import numpy as np
 
+from .field import nearest_voxel
+
 __all__ = ['connectivity', 'endpoint_labels']
 
 
@@ -9,15 +11,8 @@ def endpoint_labels(tractogram, labels, affine):
     labels = np.asarray(labels)
     if labels.ndim != 3 or not np.issubdtype(labels.dtype, np.integer) or labels.min() < 0:
         raise ValueError("labels must be a 3-D image of non-negative integers (0 = no region)")
-    inv = np.linalg.inv(np.asarray(affine, np.float64))
-    ends = tractogram.endpoints.astype(np.float64)                       # (n, 2, 3)
-    v = np.rint(ends @ inv[:3, :3].T + inv[:3, 3]).astype(np.int64)
-    dims = np.asarray(labels.shape)
-    inside = np.all((v >= 0) & (v < dims), axis=-1)
-    vc = np.clip(v, 0, dims - 1)
-    out = labels[vc[..., 0], vc[..., 1], vc[..., 2]]
-    out[~inside] = 0
-    return out
+    idx, in_grid = nearest_voxel(tractogram.endpoints, affine, labels.shape)      # (n, 2, 3), (n, 2)
+    return np.where(in_grid, labels[idx[..., 0], idx[..., 1], idx[..., 2]], 0)
 
 
 def connectivity(tractogram, labels, affine):

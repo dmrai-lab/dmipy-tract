@@ -17,10 +17,21 @@ import numpy as np
 
 from dmipy_sim.replay import so3
 
-__all__ = ['FODField', 'trilinear_indices']
+__all__ = ['FODField', 'nearest_voxel']
 
 
-def trilinear_indices(voxel_coords, shape):
+def nearest_voxel(points, affine, shape):
+    """The nearest voxel of world points ``(..., 3)`` under the voxel-to-world ``affine``: ``(index, in_grid)``, the
+    voxel coordinate rounded half to even and clipped into ``shape`` (``(..., 3)`` int64, always a valid index), and
+    whether that voxel lies in the grid before clipping (``(...,)``)."""
+    inv = np.linalg.inv(np.asarray(affine, np.float64))
+    v = np.rint(np.asarray(points, np.float64) @ inv[:3, :3].T + inv[:3, 3]).astype(np.int64)
+    dims = np.asarray(shape[:3], np.int64)
+    in_grid = np.all((v >= 0) & (v < dims), axis=-1)
+    return np.clip(v, 0, dims - 1), in_grid
+
+
+def _trilinear_indices(voxel_coords, shape):
     """The eight corner indices ``(n, 8, 3)`` and weights ``(n, 8)`` of the clamped trilinear interpolant at
     ``voxel_coords (n, 3)``; ``inside (n,)`` is False where a coordinate leaves ``[-0.5, N - 0.5]``."""
     p = np.asarray(voxel_coords, np.float64).reshape(-1, 3)
@@ -56,6 +67,7 @@ class FODField:
     affine: np.ndarray
     mask: np.ndarray
     order: int = field(init=False)
+    inverse_affine: np.ndarray = field(init=False, repr=False, compare=False)     # world to voxel
 
     def __post_init__(self):
         sh = np.ascontiguousarray(np.asarray(self.sh), dtype=np.float32)
@@ -76,6 +88,7 @@ class FODField:
         object.__setattr__(self, 'affine', affine)
         object.__setattr__(self, 'mask', mask)
         object.__setattr__(self, 'order', order)
+        object.__setattr__(self, 'inverse_affine', np.linalg.inv(affine))
 
     @property
     def shape(self):
@@ -85,10 +98,6 @@ class FODField:
     def n_coef(self):
         return self.sh.shape[3]
 
-    @property
-    def inverse_affine(self):
-        return np.linalg.inv(self.affine)
-
     def voxel_from_world(self, points_mm):
         """World millimetres ``(n, 3)`` to continuous voxel coordinates."""
         p = np.asarray(points_mm, np.float64)
@@ -96,24 +105,23 @@ class FODField:
         return p @ inv[:3, :3].T + inv[:3, 3]
 
     def world_from_voxel(self, voxel_coords):
+        """Continuous voxel coordinates ``(n, 3)`` to world millimetres."""
         v = np.asarray(voxel_coords, np.float64)
         return v @ self.affine[:3, :3].T + self.affine[:3, 3]
 
     def interpolate(self, points_mm):
         """The coefficients at world points ``(n, 3)``, ``(n, n_coef)`` float64; zero outside the domain."""
-        idx, w, inside = trilinear_indices(self.voxel_from_world(points_mm), self.shape)
+        idx, w, inside = _trilinear_indices(self.voxel_from_world(points_mm), self.shape)
         c = self.sh[idx[..., 0], idx[..., 1], idx[..., 2]].astype(np.float64)     # (n, 8, n_coef)
         out = np.einsum('nk,nkc->nc', w, c)
         out[~inside] = 0.0
         return out
 
     def in_mask(self, points_mm):
-        """The mask at the nearest voxel of each world point; False outside the grid."""
-        v = np.rint(self.voxel_from_world(points_mm)).astype(np.int64)
-        dims = np.asarray(self.shape)
-        inside = np.all((v >= 0) & (v < dims), axis=1)
-        vc = np.clip(v, 0, dims - 1)
-        return inside & self.mask[vc[:, 0], vc[:, 1], vc[:, 2]]
+        """The mask at the nearest voxel of each world point ``(..., 3)``; False outside the grid. The numpy spelling of
+        the kernels' mask rule."""
+        idx, in_grid = nearest_voxel(points_mm, self.affine, self.shape)
+        return in_grid & self.mask[idx[..., 0], idx[..., 1], idx[..., 2]]
 
     @classmethod
     def from_mif(cls, path, mask=None):
