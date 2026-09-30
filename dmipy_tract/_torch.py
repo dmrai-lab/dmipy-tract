@@ -156,16 +156,18 @@ class _Field:
 
 def _half(F, pos0, d0, ok, gindex, key, half_id, prob, max_steps, chunk):
     """One half for every lane: ``(slabs [(t, idx, points)], count, reason)``; slab ``t`` holds the ``t``-th point
-    after the seed of the lanes ``idx`` that took step ``t``."""
+    after the seed of the lanes ``idx`` that took step ``t``. The lanes that take step ``t`` are the ones active at
+    step ``t + 1``, so a step costs one ``nonzero`` (one host sync) and indexes with integers."""
     import torch
     n = pos0.shape[0]
     pos, d = pos0.clone(), d0.clone()
-    active = ok.clone(); count = torch.zeros(n, dtype=torch.int32, device=F.device); reason = torch.zeros(n, dtype=torch.int8, device=F.device)
+    count = torch.zeros(n, dtype=torch.int32, device=F.device); reason = torch.zeros(n, dtype=torch.int8, device=F.device)
+    idx_all = torch.nonzero(ok, as_tuple=True)[0]
     slabs = []
     for t in range(1, max_steps):
-        idx_all = torch.nonzero(active, as_tuple=True)[0]
         if idx_all.numel() == 0:
             break
+        new_pos, new_d, taken, why = [], [], [], []
         for s in range(0, idx_all.numel(), chunk):
             c = idx_all[s:s + chunk]
             pmf = F.amplitudes(pos[c])
@@ -176,15 +178,18 @@ def _half(F, pos0, d0, ok, gindex, key, half_id, prob, max_steps, chunk):
             idx, okc = F.choose(w, u, prob)
             nd = F.V[idx]
             nd = torch.where(((nd * dc).sum(1) > 0)[:, None], nd, -nd)
-            new_pos = pos[c] + F.step * nd
-            in_grid, in_mask = F.mask_at(new_pos)
-            taken = okc & in_mask
-            r = torch.where(~okc, STOP_NO_DIRECTION, torch.where(~in_grid, STOP_OUTSIDE, STOP_MASK)).to(torch.int8)
-            pos[c[taken]] = new_pos[taken]; d[c[taken]] = nd[taken]
-            reason[c[~taken]] = r[~taken]; active[c[~taken]] = False; count[c[taken]] += 1
-            if taken.any():
-                slabs.append((t, c[taken], new_pos[taken]))
-    reason[active] = STOP_MAX_STEPS
+            p = pos[c] + F.step * nd
+            in_grid, in_mask = F.mask_at(p)
+            new_pos.append(p); new_d.append(nd); taken.append(okc & in_mask)
+            why.append(torch.where(~okc, STOP_NO_DIRECTION, torch.where(~in_grid, STOP_OUTSIDE, STOP_MASK)).to(torch.int8))
+        taken = torch.cat(taken)
+        reason[idx_all] = torch.where(taken, reason[idx_all], torch.cat(why))
+        ti = torch.nonzero(taken, as_tuple=True)[0]
+        idx_all = idx_all[ti]                                                   # the lanes that go on
+        pts = torch.cat(new_pos)[ti]
+        pos[idx_all] = pts; d[idx_all] = torch.cat(new_d)[ti]; count[idx_all] += 1
+        slabs.append((t, idx_all, pts))
+    reason[idx_all] = STOP_MAX_STEPS
     return slabs, count, reason
 
 
