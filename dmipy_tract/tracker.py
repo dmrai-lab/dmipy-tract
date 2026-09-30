@@ -359,18 +359,27 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     chunk : int, optional
         Lanes per phase kernel call (default ``DMIPY_TRACT_CHUNK`` = 65536); the result does not depend on it.
     phase_steps : int, optional
-        Steps per phase between compactions of the active lanes (default ``DMIPY_TRACT_PHASE`` = 32); the result
-        does not depend on it.
+        JAX backend only. Steps per phase between compactions of the active lanes (default ``DMIPY_TRACT_PHASE``
+        = 32); the result does not depend on it.
     batch : int, optional
-        Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device memory
+        JAX backend only. Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device memory
         (the phase slabs of a batch stay on the device until its streamlines are joined); the result does not
-        depend on it.
+        depend on it. A batch is at most the state size that holds all ``n`` seeds (4,096, 65,536 or 2**20
+        rows), so a larger value runs as that size.
     backend : 'jax' | 'torch'
         The kernel (dmipy-tract#4): the JAX one (the reference), or :mod:`dmipy_tract._torch` for hosts that run
         PyTorch only. The conventions are the same; the probabilistic draws come from each backend's own
         counter-based stream, so the two give different, equally valid tractograms, each independent of ``chunk``.
     device : optional
-        The torch device (the current CUDA device when one exists, else the CPU); ignored on JAX.
+        Torch backend only. The torch device (the current CUDA device when one exists, else the CPU).
+
+    Every argument is validated before the backend runs; an argument of the other backend is refused by name.
+
+    Returns
+    -------
+    Tractogram
+        One streamline per seed in seed order (``seed_index`` is ``arange(n)``), less the ones ``min_length_mm``
+        drops; empty for zero seeds.
     """
     if not isinstance(field, FODField):
         raise TypeError("field must be an FODField")
@@ -405,20 +414,31 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     if chunk < 1:
         raise ValueError("chunk must be at least 1")
     if backend == 'torch':
+        for name, value in (('phase_steps', phase_steps), ('batch', batch)):
+            if value is not None:
+                raise ValueError(f"{name} is an argument of the JAX backend; the torch backend does not take it")
         if not isinstance(key, (int, np.integer)):
             raise ValueError("the torch backend takes an int key")
+    else:
+        if device is not None:
+            raise ValueError("device is an argument of the torch backend; the JAX backend runs on JAX's default "
+                             "device")
+        K = int(os.environ.get("DMIPY_TRACT_PHASE", "32")) if phase_steps is None else int(phase_steps)
+        if K < 1:
+            raise ValueError("phase_steps must be at least 1")
+        batch = int(os.environ.get("DMIPY_TRACT_BATCH", str(1 << 20))) if batch is None else int(batch)
+        if batch < 1:
+            raise ValueError("batch must be at least 1")
+    if n == 0:
+        return Tractogram(np.zeros((0, 3), np.float32), np.zeros(1, np.int64), np.zeros(0, np.int64),
+                          np.zeros((0, 2), np.int8))
+    if backend == 'torch':
         from ._torch import track_torch
         return track_torch(field, seeds, rule=rule, step_mm=step_mm, max_angle=max_angle, max_steps=max_steps,
                            relative_threshold=relative_threshold, min_length_mm=min_length_mm, V=V, B=B,
                            initial_directions=initial_directions, key=int(key), chunk=chunk, device=device)
     key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
-    K = int(os.environ.get("DMIPY_TRACT_PHASE", "32")) if phase_steps is None else int(phase_steps)
-    if K < 1:
-        raise ValueError("phase_steps must be at least 1")
     K = min(K, max_steps)
-    batch = int(os.environ.get("DMIPY_TRACT_BATCH", str(1 << 20))) if batch is None else int(batch)
-    if batch < 1:
-        raise ValueError("batch must be at least 1")
 
     f32 = jnp.float32
     dims = jnp.asarray(field.shape, jnp.int32)

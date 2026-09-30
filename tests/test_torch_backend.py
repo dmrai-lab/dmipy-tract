@@ -134,6 +134,11 @@ def test_refusals():
     with pytest.raises(ValueError, match="int key"):
         import jax
         track(f, [[4.0, 4.0, 4.0]], key=jax.random.key(0), **T)
+    for name in ("phase_steps", "batch"):
+        with pytest.raises(ValueError, match=f"{name} is an argument of the JAX backend"):
+            track(f, [[4.0, 4.0, 4.0]], **{name: 8}, **T)
+    with pytest.raises(ValueError, match="chunk must be at least 1"):
+        track(f, [[4.0, 4.0, 4.0]], chunk=0, **T)
 
 
 @pytest.mark.skipif(not torch.cuda.is_available(), reason="no CUDA device")

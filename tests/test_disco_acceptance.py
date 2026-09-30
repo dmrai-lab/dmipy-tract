@@ -31,8 +31,9 @@ def disco():
 
 
 def test_connectivity_pearson_is_the_replay_reference(disco):
-    """dipy on this volume scores 0.904/0.905 (dmipy-sim#505); the replay reference is 0.912 +- 0.003. The bar is
-    the reference's band, and the connected-pair recall is the ground truth's."""
+    """The bar is a Pearson of 0.90: dipy's 0.904/0.905 on this volume (dmipy-sim#505), rounded down, so the
+    tracker is at least as good as the established pipeline on the same data. No connected pair may be missed (the
+    ground truth's recall)."""
     bench, field, rois, seeds = disco
     from dmipy_tract import track, connectivity
     tg = track(field, seeds, rule='probabilistic', step_mm=0.5, max_angle=30.0, max_steps=500, key=0)

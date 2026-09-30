@@ -46,8 +46,11 @@ class Tractogram:
 
     def __getitem__(self, i):
         i = int(i)
+        n = len(self)
+        if not -n <= i < n:
+            raise IndexError(f"streamline {i} of a tractogram of {n}")
         if i < 0:
-            i += len(self)
+            i += n
         return self.points[self.offsets[i]:self.offsets[i + 1]]
 
     def __iter__(self):

@@ -149,7 +149,8 @@ class _Field:
 
 
 def _half(F, pos0, d0, ok, gindex, key, half_id, prob, max_steps, chunk):
-    """One half for every lane: ``(slabs [(t, idx, points)], count, reason, first_step)``."""
+    """One half for every lane: ``(slabs [(t, idx, points)], count, reason)``; slab ``t`` holds the ``t``-th point
+    after the seed of the lanes ``idx`` that took step ``t``."""
     import torch
     n = pos0.shape[0]
     pos, d = pos0.clone(), d0.clone()

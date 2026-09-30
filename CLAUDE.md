@@ -41,7 +41,8 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
   on jittered seeds (dipy seeds its RNG from the seed's coordinate sum; a regular grid correlates its streamlines).
 - **Declarative docstrings.** What a thing is; no history of what it used to be.
 - **One function per application.** No compatibility spellings; a rename converts every caller.
-- **Two backends are two kernels of one tracker.** `track()` validates once and dispatches; the conventions, the
+- **Two backends are two kernels of one tracker.** `track()` validates every argument before dispatch, and refuses
+  by name an argument the chosen backend does not use (`phase_steps`, `batch` on torch; `device` on JAX); the conventions, the
   RNG contract (counter-based, chunk-invariant, device-invariant), `Tractogram`, seeding and connectivity are
   shared. A convention changed in one kernel is changed in the other and in `tests/conftest.py`'s reference. The
   torch draw is not JAX's stream: probabilistic tractograms differ between backends by design, the deterministic

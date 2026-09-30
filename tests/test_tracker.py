@@ -286,6 +286,15 @@ def test_kernel_equals_the_per_streamline_reference(cross, rule):
         np.testing.assert_allclose(tg[i], pts, atol=1e-3, err_msg=str(i))
 
 
+@pytest.mark.parametrize("backend", ["jax", "torch"])
+def test_zero_seeds_is_an_empty_tractogram(backend):
+    if backend == "torch":
+        pytest.importorskip("torch")
+    tg = track(uniform_field((4, 4, 4)), np.zeros((0, 3)), backend=backend)
+    assert len(tg) == 0 and tg.points.shape == (0, 3) and tg.offsets.tolist() == [0]
+    assert tg.seed_index.shape == (0,) and tg.stop_reason.shape == (0, 2)
+
+
 # ------------------------------------------------------------------ refusals
 def test_refusals_by_name():
     f = uniform_field((4, 4, 4))
@@ -310,3 +319,5 @@ def test_refusals_by_name():
         track(f.sh, s)
     with pytest.raises(ValueError, match="chunk must be at least 1"):
         track(f, s, chunk=0)
+    with pytest.raises(ValueError, match="device is an argument of the torch backend"):
+        track(f, s, device="cpu")
