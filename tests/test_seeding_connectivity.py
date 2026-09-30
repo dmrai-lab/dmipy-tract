@@ -33,6 +33,9 @@ def test_seeds_refusals():
         seeds_from_mask(np.ones((2, 2, 2), bool), np.eye(3))
     with pytest.raises(ValueError, match="density"):
         seeds_from_mask(np.ones((2, 2, 2), bool), np.eye(4), density=0)
+    for density in (2.5, 2.0, [1, 2.5, 3]):
+        with pytest.raises(ValueError, match="density must be a positive int"):
+            seeds_from_mask(np.ones((2, 2, 2), bool), np.eye(4), density=density)
 
 
 @pytest.mark.parametrize("density", [1, 2, 4, [1, 2, 3]])

@@ -7,7 +7,8 @@ import numpy as np
 __all__ = ['Tractogram', 'STOP_REASONS', 'STOP_NONE', 'STOP_MASK', 'STOP_OUTSIDE', 'STOP_NO_DIRECTION',
            'STOP_MAX_STEPS']
 
-STOP_NONE = 0            # the half never started (a padded lane)
+STOP_NONE = 0            # the value a half's reason starts from in the kernels (padded lanes, seeds without a first
+                         # direction); never in a returned Tractogram, where such a seed's halves are STOP_NO_DIRECTION
 STOP_MASK = 1            # the next point's nearest voxel is outside the mask
 STOP_OUTSIDE = 2         # the next point's nearest voxel is outside the grid
 STOP_NO_DIRECTION = 3    # no direction inside the cone above the threshold (or the FOD is not defined here)
@@ -46,8 +47,11 @@ class Tractogram:
 
     def __getitem__(self, i):
         i = int(i)
+        n = len(self)
+        if not -n <= i < n:
+            raise IndexError(f"streamline {i} of a tractogram of {n}")
         if i < 0:
-            i += len(self)
+            i += n
         return self.points[self.offsets[i]:self.offsets[i + 1]]
 
     def __iter__(self):
@@ -62,11 +66,9 @@ class Tractogram:
     @property
     def lengths_mm(self):
         """Arc length per streamline, ``(n,)``, the sum of its segment lengths."""
-        seg = np.linalg.norm(np.diff(self.points, axis=0).astype(np.float64), axis=1)
-        keep = np.ones(seg.shape[0], bool)
-        keep[self.offsets[1:-1] - 1] = False          # the join between consecutive streamlines is no segment
-        seg = seg * keep
-        cum = np.concatenate([[0.0], np.cumsum(seg)])
+        seg = np.linalg.norm(np.diff(self.points, axis=0), axis=1)          # float32 segments
+        seg[self.offsets[1:-1] - 1] = 0.0             # the join between consecutive streamlines is no segment
+        cum = np.concatenate([[0.0], np.cumsum(seg, dtype=np.float64)])
         starts = self.offsets[:-1]
         ends = self.offsets[1:] - 1
         return cum[ends] - cum[starts]
@@ -97,6 +99,8 @@ class Tractogram:
 
     @classmethod
     def concatenate(cls, parts):
+        """One tractogram of the streamlines of ``parts`` in order, with their seed indices and stop reasons; empty
+        for no parts."""
         parts = list(parts)
         if not parts:
             return cls(np.zeros((0, 3), np.float32), np.zeros(1, np.int64), np.zeros(0, np.int64),

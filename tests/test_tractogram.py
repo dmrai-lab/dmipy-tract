@@ -31,6 +31,10 @@ def test_indexing_iteration_and_counts():
     assert len(tg) == 2
     np.testing.assert_array_equal(tg[0], a)
     np.testing.assert_array_equal(tg[-1], b)
+    np.testing.assert_array_equal(tg[-2], a)
+    for i in (2, -3):
+        with pytest.raises(IndexError, match=f"streamline {i} of a tractogram of 2"):
+            tg[i]
     np.testing.assert_array_equal([len(s) for s in tg], [3, 1])
     np.testing.assert_array_equal(tg.n_points, [3, 1])
     np.testing.assert_allclose(tg.lengths_mm, [2.0, 0.0])

@@ -1,33 +1,16 @@
 """The direction set a tracker chooses from, and the spherical-harmonics matrix that evaluates an FOD on it.
 
 The basis is dmipy-sim's :func:`dmipy_sim.replay.so3.real_sh`: orthonormal real spherical harmonics, even orders,
-compact layout (MRtrix's ``tournier07`` convention); nothing here defines a basis of its own.
+compact layout (MRtrix's ``tournier07`` convention), and its coefficient count ``so3.n_sh_coeffs`` / order
+``so3.lmax_of``; nothing here defines a basis of its own.
 """
 import numpy as np
 
 from dmipy_sim.replay import so3
 
-__all__ = ['hemisphere', 'sh_matrix', 'order_from_ncoef', 'ncoef_from_order']
+__all__ = ['hemisphere', 'sh_matrix']
 
 _GOLDEN_ANGLE = np.pi * (3.0 - np.sqrt(5.0))
-
-
-def ncoef_from_order(order):
-    """Coefficients of an even-order real SH expansion up to ``order``: ``(order + 1)(order + 2) / 2``."""
-    order = int(order)
-    if order < 0 or order % 2:
-        raise ValueError(f"the SH order must be even and non-negative, not {order}")
-    return (order + 1) * (order + 2) // 2
-
-
-def order_from_ncoef(n_coef):
-    """The even order whose expansion has ``n_coef`` coefficients (15, 28, 45, 66 for 4, 6, 8, 10); refused otherwise."""
-    n_coef = int(n_coef)
-    order = int(round((-3.0 + np.sqrt(1.0 + 8.0 * n_coef)) / 2.0))
-    if order < 0 or order % 2 or ncoef_from_order(order) != n_coef:
-        raise ValueError(f"{n_coef} coefficients is no even-order real SH expansion "
-                         f"(6, 15, 28, 45, 66, ... for orders 2, 4, 6, 8, 10, ...)")
-    return order
 
 
 def hemisphere(n=362):

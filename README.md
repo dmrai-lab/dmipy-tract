@@ -13,7 +13,10 @@ tg.to_tck("tracks.tck")                                # MRtrix format, through 
 ```
 
 `FODField.from_mif("wmfod.mif")` reads an MRtrix FOD; a dmipy-fit `csd_tournier07_jax` fit's `sh_coeff` is the
-same basis, no conversion. DiSCo, the BATMAN brain and an HCP subject are the same input; the seeding density,
+same basis, so no basis conversion, but its directions are those of the gradient table it was fitted with and an
+`FODField`'s are world coordinates: fit with the b-vectors in the world frame (for a scaling-plus-translation
+affine the voxel frame is the world frame; under a rotation, rotate the b-vectors or the coefficients with
+`so3.rotate_sh`). DiSCo, the BATMAN brain and an HCP subject are the same input; the seeding density,
 not the grid, sets the time.
 
 ## What the tracker is
@@ -33,18 +36,19 @@ the half with that reason (`stop_reason`); no direction above the threshold insi
 points per half is the cap. These are dipy's `LocalTracking` conventions, measured on constructed fields, so the
 deterministic rule reproduces dipy point for point (a test).
 
-Randomness is counter-based (`fold_in(fold_in(key, seed_index), step)`): streamline `i` is a function of the key,
-seed `i` and the field, not of the chunk size or the device. Positions are float32 millimetres; every matrix product
+Randomness is counter-based: streamline `i` draws from `fold_in(fold_in(key, i), 1 + 2 t + h)` at step `t` of half
+`h` (0 forward, 1 backward) and from `fold_in(fold_in(key, i), 0)` for its first direction, so it is a function of
+the key, seed `i` and the field, not of the chunk size, the phase length, the batch or the other seeds. Positions are float32 millimetres; every matrix product
 is at `Precision.HIGHEST` (a float32 matmul on CUDA is TF32 otherwise).
 
-**Two backends, one tracker** (`track(..., backend="jax" | "torch")`, issue #4). The torch kernel
+**Two backends, one tracker** (`track(..., backend="jax" | "torch")`). The torch kernel
 (`dmipy_tract/_torch.py`, `pip install dmipy-tract[torch]`) exists for hosts that run PyTorch only (Hugging Face's
 shared GPU pool); it is eager, one step for every active lane at once in chunks, the same conventions, TF32 off for
 the call. Its draws come from its own counter-based stream (the splitmix64 finaliser of `(key, streamline, counter)`,
 the same bits on the CPU, on CUDA and in numpy), so the two backends give different, equally valid probabilistic
-tractograms; on the deterministic rule they agree to float32 arithmetic. The torch kernel passes the same
-constructed-field tests (stopping, reasons, join, backward half, circle, the per-streamline reference with its own
-draws, chunk invariance, CPU = CUDA bit for bit).
+tractograms; on the deterministic rule they agree to float32 arithmetic. One test set runs on both kernels
+(stopping, reasons, join, backward half, circle, invariances, the per-streamline reference under each kernel's own
+draws); the CUDA-against-CPU tests of both run where a card is present.
 
 ## Measured
 
@@ -60,9 +64,12 @@ false, 0 missed), as in the published dipy runs.
 | dipy `LocalTracking` on the same FOD and seeds, L40S host | 2,822,911 (one per FOD peak per seed) | 0.917 | 0.917 | 1016 s |
 | the replay paper's dipy pipeline (dipy CSD), dmipy-sim#505 | 1.6 M | 0.904 – 0.912 | | 250 – 500 s |
 
-The two connectivity matrices (this tracker and dipy on the same field) correlate at 0.997. CPU and GPU tractograms
-are bit-identical (lengths, stop reasons and positions), and so are tractograms at any chunk size, phase length or
-batch size.
+The two connectivity matrices (this tracker and dipy on the same field) correlate at 0.997. On the L40S on
+2026-09-29 the CPU and GPU tractograms of this run were bit-identical (lengths, stop reasons and positions): a
+measurement on that host, not a guarantee of the design (another device or XLA version may order a float32 sum
+differently); `tests/test_tracker.py::test_jax_cuda_equals_the_cpu_bit_for_bit` and its torch twin check it where
+a card is present. Tractograms at any chunk size, phase length or batch size are bit-identical by construction
+(tested).
 
 Where the 1.6 s go (`benchmarks/profile_track.py`, L40S): the phase kernels 0.9 s (40 calls at 65,536 or 4,096
 lanes, phases of 32 steps between compactions of the active lanes), the device-side join and its one transfer 0.2 s,
@@ -86,7 +93,7 @@ cache) removes from the second process on; (3) the coefficient gather, if a brai
 
 ## Tests
 
-`pytest tests -q` (CPU, about a minute; dipy is a test dependency, never imported by the package). Every mechanism has
+`pytest tests -q` (CPU, 75 s on the shared 72-core host; dipy is a test dependency, never imported by the package). Every mechanism has
 a deterministic test on constructed inputs: interpolation against closed forms and `scipy.ndimage.map_coordinates`;
 the basis against a delta on every sphere direction and against dipy's `tournier07`; the inverse-CDF sampler at every
 breakpoint; stopping exhaustive over seed positions and over the four reasons; the bidirectional join; the deterministic
