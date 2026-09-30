@@ -29,52 +29,22 @@ times = {"first": 0.0, "phase_kernel": 0.0, "join": 0.0, "select": 0.0, "gather"
          "first_point": 0.0}
 calls = {"phase": 0}
 lanes_seen = []
-orig_phase, orig_first, orig_join = T._compiled_phase, T._compiled_first, T._Batch.join
 
 
-def timed_helper(name, orig):
-    def maker(*a):
-        fn = orig(*a)
-
-        def w(*args):
-            t0 = time.perf_counter()
-            out = fn(*args)
-            jax.block_until_ready(out)
-            times[name] += time.perf_counter() - t0
-            return out
-        return w
-    return maker
-
-
-for _name, _attr in (("select", "_compiled_select"), ("gather", "_compiled_gather"), ("update", "_compiled_update"),
-                     ("first_point", "_compiled_first_point")):
-    setattr(T, _attr, timed_helper(_name, getattr(T, _attr)))
-
-
-def timed_phase(*a):
-    fn = orig_phase(*a)
-
-    def w(*args):
+def timed(name, fn):
+    def w(*args, **kw):
         t0 = time.perf_counter()
-        out = fn(*args)
+        out = fn(*args, **kw)
         jax.block_until_ready(out)
-        times["phase_kernel"] += time.perf_counter() - t0
-        calls["phase"] += 1
-        lanes_seen.append(int(args[0].shape[0]))
+        times[name] += time.perf_counter() - t0
+        if name == "phase_kernel":
+            calls["phase"] += 1
+            lanes_seen.append(int(args[0].shape[0]))
         return out
     return w
 
 
-def timed_first(*a):
-    fn = orig_first(*a)
-
-    def w(*args):
-        t0 = time.perf_counter()
-        out = fn(*args)
-        jax.block_until_ready(out)
-        times["first"] += time.perf_counter() - t0
-        return out
-    return w
+orig_join = T._Batch.join
 
 
 def timed_join(self, *a, **k):
@@ -84,7 +54,10 @@ def timed_join(self, *a, **k):
     return out
 
 
-T._compiled_phase, T._compiled_first, T._Batch.join = timed_phase, timed_first, timed_join
+for _name, _attr in (("first", "_first"), ("phase_kernel", "_phase"), ("select", "_select"), ("gather", "_gather"),
+                     ("update", "_update"), ("first_point", "_first_point")):
+    setattr(T, _attr, timed(_name, getattr(T, _attr)))
+T._Batch.join = timed_join
 track(field, seeds, key=0)                              # compile every shape this run uses
 for k in times:
     times[k] = 0.0
