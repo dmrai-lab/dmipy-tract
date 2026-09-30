@@ -70,4 +70,4 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
 - A phase slab can have zero columns (no lane took a step): guard `slab.shape[1] == 0` before indexing column 0.
 - The JAX CUDA plugin needs the nvidia libraries on `LD_LIBRARY_PATH` in a uv venv (see the L40S notes in the
   memory), else it falls back to CPU silently; `JAX_PLATFORMS=cpu` in `tests/conftest.py` is a default, a GPU run
-  sets `JAX_PLATFORMS=cuda`.
+  sets `JAX_PLATFORMS=cuda,cpu` (both, for the CUDA-against-CPU test).

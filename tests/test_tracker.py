@@ -320,3 +320,24 @@ def test_refusals_by_name(backend):
         track(f.sh, s, **backend.kw)
     with pytest.raises(ValueError, match="chunk must be at least 1"):
         track(f, s, chunk=0, **backend.kw)
+
+
+def _has_jax_devices(*platforms):
+    try:
+        return all(jax.devices(p) for p in platforms)
+    except RuntimeError:
+        return False
+
+
+@pytest.mark.skipif(not _has_jax_devices("cpu", "gpu"), reason="no CUDA device (a GPU run sets JAX_PLATFORMS=cuda,cpu)")
+def test_jax_cuda_equals_the_cpu_bit_for_bit(cross):
+    """Measured on the L40S on 2026-09-29 for DiSCo, checked here where a card is present."""
+    f, _, crossing = cross
+    seeds = np.argwhere(crossing).astype(float) + 0.1
+    out = []
+    for platform in ("cpu", "gpu"):
+        with jax.default_device(jax.devices(platform)[0]):
+            out.append(track(f, seeds, rule='probabilistic', key=2))
+    np.testing.assert_array_equal(out[0].offsets, out[1].offsets)
+    np.testing.assert_array_equal(out[0].points, out[1].points)
+    np.testing.assert_array_equal(out[0].stop_reason, out[1].stop_reason)
