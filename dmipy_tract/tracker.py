@@ -40,6 +40,14 @@ RULES = ('probabilistic', 'deterministic')
 _HI = jax.lax.Precision.HIGHEST
 
 
+def _counter(t, half):
+    """The RNG counter of step ``t`` of half ``half`` (0 forward, 1 backward); counter 0 is the first direction's."""
+    return 1 + 2 * t + half
+
+
+_fold_v = jax.jit(jax.vmap(jax.random.fold_in, in_axes=(None, 0)))     # one key, many streamline indices
+
+
 # ----------------------------------------------------------------------------------------------------------------
 # per-lane pieces (traced once per compiled shape)
 def _interpolate(field_flat, dims, v):
@@ -140,7 +148,7 @@ def _compiled_phase(rule, n_coef, n_dirs, K, lanes):
 
         def body(c):
             slab, pos, d, active, cnt, reason, k = c
-            keys = fold_v(lane_keys, 1 + 2 * (t0 + k) + half_id)
+            keys = fold_v(lane_keys, _counter(t0 + k, half_id))
             new_pos, nd, ok, in_grid, in_mask = lane_step_v(field_flat, dims, inv_lin, inv_off, mask_flat, B, V,
                                                               step, cos_max, rel_thr, pos, d, keys)
             taken = active & ok & in_mask
@@ -174,8 +182,8 @@ def _compiled_select(n_rows, L):
 
 @functools.lru_cache(maxsize=None)
 def _compiled_gather(n_rows, L):
-    def gather(pos, d, count, idx):
-        return pos[idx], d[idx], count[idx], idx < n_rows
+    def gather(pos, d, count, lane_keys, idx):
+        return pos[idx], d[idx], count[idx], lane_keys[idx], idx < n_rows
     return jax.jit(gather)
 
 
@@ -238,12 +246,11 @@ class _Batch:
         self.n_rows, self.K, self.chunk, self.max_steps = n_rows, K, chunk, max_steps
         self.lane_floor = min(4096, 1 << max(0, n_seeds - 1).bit_length())      # a small run stays small
         self.rule, self.n_coef, self.n_dirs, self.static = rule, n_coef, n_dirs, static
-        self.key, self.offset = key, offset
         self.seeds = seeds                                   # (n_rows + 1, 3) float32, device
         self.first_dir = first_dir
         self.ok = ok                                         # has a first direction
         self.real = real                                     # a seed, not padding
-        self.fold_v = jax.jit(jax.vmap(jax.random.fold_in, in_axes=(None, 0)))
+        self.lane_keys = _fold_v(key, jnp.arange(offset, offset + n_rows + 1, dtype=jnp.uint32))
 
     def half(self, half_id, d0):
         n1 = self.n_rows + 1
@@ -266,20 +273,22 @@ class _Batch:
             remaining = active
             for _ in range((s + L - 1) // L):
                 idx, remaining = select(remaining)
-                pos_c, d_c, before, act_c = gather(pos, d, count, idx)
-                keys = self.fold_v(self.key, (idx + self.offset).astype(jnp.uint32))
+                pos_c, d_c, before, keys, act_c = gather(pos, d, count, self.lane_keys, idx)
                 slab, cnt, pos_o, d_o, act_o, reason_o = phase(pos_c, d_c, act_c, keys, jnp.int32(half_id),
                                                                 jnp.int32(t0), jnp.int32(self.max_steps), *self.static)
                 pos, d, active, count, reason = update(pos, d, active, count, reason, idx, pos_o, d_o, act_o, cnt,
                                                        reason_o)
-                slabs.append((L, idx, before, cnt, slab))
+                slabs.append((t0, L, idx, before, cnt, slab))
             t0 += self.K
         reason = jnp.where(active, jnp.int8(STOP_MAX_STEPS), reason)
         return slabs, count, reason
 
     def first_point(self, slabs):
+        """Each lane's first forward point (its seed where it took none); only the first phase's slabs hold one."""
         first_pt = self.seeds
-        for L, idx, before, cnt, slab in slabs:
+        for t0, L, idx, before, cnt, slab in slabs:
+            if t0 != 1:
+                break
             first_pt = _compiled_first_point(self.n_rows, L)(first_pt, idx, before, cnt, slab)
         return first_pt
 
@@ -292,7 +301,7 @@ class _Batch:
         points = jnp.zeros((P, 3), jnp.float32)
         points = _compiled_seed_rows(self.n_rows, P)(points, dest0, self.real, self.seeds)
         for forward, slabs in ((True, slabs_f), (False, slabs_b)):
-            for L, idx, before, cnt, slab in slabs:
+            for _, L, idx, before, cnt, slab in slabs:
                 points = _compiled_scatter(L, self.K, P, forward)(points, dest0, idx, before, cnt, slab)
         return np.asarray(points[:total]), np.asarray(n_pts)[:self.n_rows]
 
@@ -451,7 +460,6 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     Vd = jnp.asarray(V, f32)
     static = (field_flat, dims, inv_lin, inv_off, mask_flat, Bd, Vd, jnp.asarray(step_mm, f32),
               jnp.asarray(np.cos(np.deg2rad(max_angle)), f32), jnp.asarray(relative_threshold, f32))
-    fold_v = jax.jit(jax.vmap(jax.random.fold_in, in_axes=(None, 0)))
     seeds32 = seeds.astype(np.float32)
 
     # the first direction of every seed, in chunks
@@ -464,7 +472,7 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
             m = min(first_chunk, n - s)
             seed_pos = np.zeros((first_chunk, 3), np.float32)
             seed_pos[:m] = seeds32[s:s + m]
-            keys = fold_v(key, jnp.asarray(np.arange(s, s + first_chunk), jnp.uint32))
+            keys = _fold_v(key, jnp.asarray(np.arange(s, s + first_chunk), jnp.uint32))
             fd, okd = first_fn(jnp.asarray(seed_pos), keys, field_flat, dims, inv_lin, inv_off, Bd, Vd, static[-1])
             first_dir[s:s + m] = np.asarray(fd)[:m]
             ok[s:s + m] = np.asarray(okd)[:m]

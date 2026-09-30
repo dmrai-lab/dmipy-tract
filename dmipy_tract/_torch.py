@@ -23,6 +23,7 @@ import contextlib
 
 import numpy as np
 
+from .tracker import _counter
 from .tractogram import Tractogram, STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
 _PHI = 0x9E3779B97F4A7C15
@@ -166,7 +167,7 @@ def _half(F, pos0, d0, ok, gindex, key, half_id, prob, max_steps, chunk):
             dc = d[c]
             cone = (dc @ F.V_T).abs() >= F.cos_max
             w = torch.where(cone, pmf, torch.zeros_like(pmf))
-            u = uniform_torch(key, gindex[c], 1 + 2 * t + half_id) if prob else None
+            u = uniform_torch(key, gindex[c], _counter(t, half_id)) if prob else None
             idx, okc = F.choose(w, u, prob)
             nd = F.V[idx]
             nd = torch.where(((nd * dc).sum(1) > 0)[:, None], nd, -nd)

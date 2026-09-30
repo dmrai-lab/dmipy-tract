@@ -9,6 +9,7 @@ import pytest
 import jax
 
 from dmipy_tract import FODField, sh_matrix, hemisphere
+from dmipy_tract.tracker import _counter
 from dmipy_tract.tractogram import STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
 ORDER = 8
@@ -86,7 +87,7 @@ def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max
             cdf = np.cumsum(w)
             if cdf[-1] <= 0:
                 return np.array(pts), STOP_NO_DIRECTION
-            u = uniform(1 + 2 * t + half_id)
+            u = uniform(_counter(t, half_id))
             idx = min(int(np.sum(cdf.astype(np.float32) <= np.float32(u * cdf[-1]))), V.shape[0] - 1)
         else:
             idx = int(np.argmax(w))
