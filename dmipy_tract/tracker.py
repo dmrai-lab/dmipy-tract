@@ -310,7 +310,7 @@ def _lanes_for(s, chunk, floor):
 
 def _state_rows(n):
     """The smallest of the three state sizes holding ``n`` lanes: the fixed-shape helpers compile for at most three
-    row counts in a session (each with the lane counts of the ladder)."""
+    row counts in a session (each with the lane counts of the ladder), at the price of padding rows, by design."""
     for r in _STATE_ROWS:
         if n <= r:
             return r
@@ -318,7 +318,8 @@ def _state_rows(n):
 
 
 def _points_rows(total):
-    """The ragged output's device size: a power of four from 2**16, plus the dump row."""
+    """The ragged output's device size: a power of four from 2**16, plus the dump row. Up to four times the rows the
+    output needs, by design: device memory traded for a bounded number of compiles of the join's helpers."""
     P = 1 << 16
     while P < total + 1:
         P <<= 2
