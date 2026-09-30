@@ -199,7 +199,7 @@ def _compiled_update(n_rows, L):
     def update(pos, d, active, count, reason, idx, pos_o, d_o, act_o, cnt, reason_o):
         return (pos.at[idx].set(pos_o), d.at[idx].set(d_o), active.at[idx].set(act_o), count.at[idx].add(cnt),
                 reason.at[idx].set(jnp.where(reason_o != 0, reason_o, reason[idx])))
-    return jax.jit(update)
+    return jax.jit(update, donate_argnums=(0, 1, 2, 3, 4))
 
 
 @functools.lru_cache(maxsize=None)
@@ -208,7 +208,7 @@ def _compiled_first_point(n_rows, L):
     def first_point(first_pt, idx, before, cnt, slab):
         took = ((before == 0) & (cnt > 0))[:, None]
         return first_pt.at[idx].set(jnp.where(took, slab[:, 0], first_pt[idx]))
-    return jax.jit(first_point)
+    return jax.jit(first_point, donate_argnums=0)
 
 
 @functools.lru_cache(maxsize=None)
@@ -221,7 +221,7 @@ def _compiled_scatter(L, K, P, forward):
         dest = dest0[idx][:, None] + (1 + j if forward else -(1 + j))
         dest = jnp.where(k[None, :] < cnt[:, None], dest, P - 1)
         return points.at[dest].set(slab)
-    return jax.jit(scatter)
+    return jax.jit(scatter, donate_argnums=0)
 
 
 @functools.lru_cache(maxsize=None)
@@ -239,7 +239,7 @@ def _compiled_layout(n_rows):
 def _compiled_seed_rows(n_rows, P):
     def seed_rows(points, dest0, real, seeds):
         return points.at[jnp.where(real, dest0, P - 1)].set(seeds)
-    return jax.jit(seed_rows)
+    return jax.jit(seed_rows, donate_argnums=0)
 
 
 class _Batch:
@@ -261,9 +261,7 @@ class _Batch:
 
     def half(self, half_id, d0):
         n1 = self.n_rows + 1
-        pos = self.seeds
-        d = d0
-        active = self.ok
+        pos, d, active = jnp.copy(self.seeds), jnp.copy(d0), jnp.copy(self.ok)       # the updates donate them
         count = jnp.zeros(n1, jnp.int32)
         reason = jnp.zeros(n1, jnp.int8)
         slabs = []
@@ -292,7 +290,7 @@ class _Batch:
 
     def first_point(self, slabs):
         """Each lane's first forward point (its seed where it took none); only the first phase's slabs hold one."""
-        first_pt = self.seeds
+        first_pt = jnp.copy(self.seeds)                      # the scatter donates it
         for t0, L, idx, before, cnt, slab in slabs:
             if t0 != 1:
                 break
