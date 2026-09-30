@@ -5,7 +5,7 @@ import pytest
 import jax.numpy as jnp
 from scipy.ndimage import map_coordinates
 
-from dmipy_tract import FODField
+from dmipy_tract import FODField, hemisphere, sh_matrix
 from dmipy_tract.field import _trilinear_indices, nearest_voxel
 from dmipy_tract.tracker import _interpolate
 
@@ -121,15 +121,28 @@ def test_interpolation_goes_through_the_affine():
 
 
 # ------------------------------------------------------------------ the kernel's interpolant
-def test_kernel_interpolant_equals_numpy_to_float32():
+def jax_interpolant(f, pts):
+    flat = jnp.asarray(f.sh.reshape(-1, f.n_coef))
+    dims = jnp.asarray(f.shape, jnp.int32)
+    return np.array([_interpolate(flat, dims, jnp.asarray(p, jnp.float32)) for p in pts])
+
+
+def torch_interpolant(f, pts):
+    torch = pytest.importorskip("torch")
+    from dmipy_tract._torch import _Field
+    V = hemisphere()
+    F = _Field(f, V, sh_matrix(f.order, V), 0.5, 0.5, 0.1, "cpu")
+    return F.interpolate(torch.as_tensor(pts, dtype=torch.float32)).numpy()
+
+
+@pytest.mark.parametrize("interpolant", [jax_interpolant, torch_interpolant], ids=["jax", "torch"])
+def test_kernel_interpolant_equals_numpy_to_float32(interpolant):
+    """The numpy interpolant (checked above against closed forms and scipy) is the oracle for each kernel's."""
     f = random_field()
     rng = np.random.default_rng(3)
     dims = np.asarray(f.shape)
     pts = np.concatenate([rng.uniform(-0.5, dims - 0.5, size=(300, 3)), [[-0.6, 1, 1], [1, 1, 7.6]]])
-    flat = jnp.asarray(f.sh.reshape(-1, f.n_coef))
-    dims_j = jnp.asarray(dims, jnp.int32)
-    ours = np.array([_interpolate(flat, dims_j, jnp.asarray(p, jnp.float32)) for p in pts])
-    np.testing.assert_allclose(ours, f.interpolate(pts), rtol=2e-5, atol=2e-5)
+    np.testing.assert_allclose(interpolant(f, pts), f.interpolate(pts), rtol=2e-5, atol=2e-5)
 
 
 # ------------------------------------------------------------------ the mask lookup

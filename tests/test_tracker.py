@@ -3,6 +3,7 @@ refusals, and exact agreement with the per-streamline numpy reference of the sam
 import numpy as np
 import pytest
 import jax
+import jax.numpy as jnp
 
 from dmipy_sim.replay.so3 import rotate_sh
 
@@ -239,36 +240,30 @@ def test_first_direction_is_sampled_from_the_thresholded_fod():
 
 
 def test_inverse_cdf_index_is_the_analytic_one_at_every_breakpoint_and_midpoint():
-    from dmipy_tract.tracker import _sample
-    import jax.numpy as jnp
-    import jax
+    """``_index`` itself, on integer weights summing to 256 (every CDF entry and every ``u * total`` below is exact in
+    float32): a ``u`` inside bin ``i`` lands in ``i``, a ``u`` exactly on the breakpoint below a positive bin lands in
+    that bin and not in the zero-mass entries before it (``cdf <= u total``; ``<`` would land on the plateau)."""
+    from dmipy_tract.tracker import _index, _sample
     rng = np.random.default_rng(0)
-    w = rng.random(50) * (rng.random(50) > 0.3)          # zeros interleaved: plateaus in the cdf
+    w = (rng.integers(1, 9, 50) * (rng.random(50) > 0.3)).astype(np.float32)   # zeros interleaved: CDF plateaus
     w[0] = 0.0
+    w[-1] += 256 - w.sum()
+    assert w.sum() == 256 and w[-1] > 0
     cdf = np.cumsum(w)
-    total = cdf[-1]
-    # the kernel draws u = uniform * total; feed the uniform through a stub key by monkeypatching is not needed:
-    # evaluate the index rule directly on the same arithmetic the kernel uses
-    def kernel_index(u):
-        c = jnp.cumsum(jnp.asarray(w, jnp.float32))
-        return int(jnp.minimum(jnp.sum(c <= jnp.float32(u)), w.shape[0] - 1))
-    for i in range(50):
-        if w[i] == 0:
-            continue
+    index = lambda u: int(_index(jnp.asarray(w), jnp.float32(u))[0])
+    for i in np.flatnonzero(w):
         lo = cdf[i - 1] if i > 0 else 0.0
-        mid = 0.5 * (lo + cdf[i])
-        assert kernel_index(mid) == i                        # a u inside bin i lands in i
-        assert kernel_index(lo + 1e-3 * (cdf[i] - lo)) == i  # just above the breakpoint
-    assert w[kernel_index(0.0)] > 0                          # u = 0 never lands on a zero-mass entry
-    assert w[kernel_index(np.nextafter(np.float32(total), np.float32(0)))] > 0
-    # the kernel's sampler on a one-hot pmf is that entry, for any key
-    one = np.zeros(20, np.float32)
+        assert index(lo / 256) == i                           # on the breakpoint
+        assert index((lo + 0.5 * w[i]) / 256) == i            # the bin's midpoint
+        assert index(np.nextafter(np.float32(cdf[i] / 256), np.float32(0))) == i     # just below the next breakpoint
+    assert index(np.nextafter(np.float32(1), np.float32(0))) == 49
+    idx, ok = _index(jnp.zeros(20, jnp.float32), jnp.float32(0.5))
+    assert not bool(ok)
+    one = np.zeros(20, np.float32)                            # _sample is _index of the key's draw
     one[13] = 1.0
     for k in range(5):
         idx, ok = _sample(jnp.asarray(one), jax.random.key(k))
         assert int(idx) == 13 and bool(ok)
-    idx, ok = _sample(jnp.zeros(20, jnp.float32), jax.random.key(0))
-    assert not bool(ok)
 
 
 # ------------------------------------------------------------------ the kernel against the numpy definition

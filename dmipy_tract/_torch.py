@@ -24,7 +24,7 @@ import contextlib
 import numpy as np
 
 from .tracker import _counter
-from .tractogram import Tractogram, STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
+from .tractogram import STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
 _PHI = 0x9E3779B97F4A7C15
 _M1 = 0xBF58476D1CE4E5B9
@@ -89,7 +89,7 @@ def _full_precision():
 class _Field:
     """The field, the sphere and the settings on the device."""
 
-    def __init__(self, field, V, B, step_mm, max_angle, relative_threshold, device):
+    def __init__(self, field, V, B, step_mm, cos_max, relative_threshold, device):
         import torch
         f32 = torch.float32
         self.dims = torch.as_tensor(np.asarray(field.shape, np.int64), device=device)
@@ -102,7 +102,7 @@ class _Field:
         self.B_T = torch.as_tensor(np.ascontiguousarray(B.T, np.float32), device=device)      # (n_coef, n_dirs)
         self.V = torch.as_tensor(np.asarray(V, np.float32), device=device)
         self.V_T = self.V.T.contiguous()
-        self.step = float(step_mm); self.cos_max = float(np.cos(np.deg2rad(max_angle))); self.rel_thr = float(relative_threshold)
+        self.step = float(step_mm); self.cos_max = float(cos_max); self.rel_thr = float(relative_threshold)
         self.n_dirs = int(V.shape[0]); self.device = device
         d = self.dims
         self.strides = torch.stack([d[1] * d[2], d[2], torch.ones_like(d[2])])
@@ -112,8 +112,9 @@ class _Field:
     def voxel(self, pos):
         return pos @ self.inv_lin_T + self.inv_off
 
-    def amplitudes(self, pos):
-        """The thresholded FOD on the sphere at world positions ``pos (a, 3)``: ``(a, n_dirs)``."""
+    def interpolate(self, pos):
+        """The clamped trilinear coefficients at world positions ``pos (a, 3)``: ``(a, n_coef)``, zero outside
+        ``[-0.5, N - 0.5]``."""
         import torch
         v = self.voxel(pos)
         flr = torch.floor(v); rem = v - flr
@@ -124,8 +125,12 @@ class _Field:
         flat = (corner_i * self.strides).sum(-1)                                                 # (a, 8)
         c = (self.field_flat[flat] * corner_w[:, :, None]).sum(1)                                # (a, n_coef)
         inside = ((v >= -0.5) & (v <= self.dims_f - 0.5)).all(1)
-        c = torch.where(inside[:, None], c, torch.zeros_like(c))
-        pmf = c @ self.B_T
+        return torch.where(inside[:, None], c, torch.zeros_like(c))
+
+    def amplitudes(self, pos):
+        """The thresholded FOD on the sphere at world positions ``pos (a, 3)``: ``(a, n_dirs)``."""
+        import torch
+        pmf = self.interpolate(pos) @ self.B_T
         mx = pmf.max(1, keepdim=True).values
         return torch.where((pmf < self.rel_thr * mx) | (pmf <= 0), torch.zeros_like(pmf), pmf)
 
@@ -183,58 +188,49 @@ def _half(F, pos0, d0, ok, gindex, key, half_id, prob, max_steps, chunk):
     return slabs, count, reason
 
 
-def track_torch(field, seeds, *, rule, step_mm, max_angle, max_steps, relative_threshold, min_length_mm, V, B,
-                initial_directions, key, chunk, device=None):
-    """The tractogram of ``seeds`` on ``field`` with the torch kernel; the arguments as :func:`dmipy_tract.track`
-    validates them (``V``, ``B`` the sphere and its SH matrix, ``key`` an int)."""
+def track_torch(field, seeds, first, V, B, *, rule, step_mm, cos_max, relative_threshold, max_steps, chunk, key,
+                device=None):
+    """The torch kernel on the arguments :func:`dmipy_tract.track` validated: ``(points (total, 3) float32, n_pts
+    (n,), reasons (n, 2))``, the reasons :data:`~dmipy_tract.tractogram.STOP_NONE` for a seed without a first
+    direction. ``seeds`` float32, ``first`` ``(first_dir (n, 3), ok (n,))`` or None to draw the first directions
+    from the FOD, ``V``, ``B`` the sphere and its SH matrix, ``key`` an int."""
     import torch
     if device is None:
         device = "cuda" if torch.cuda.is_available() else "cpu"
     prob = rule == 'probabilistic'
     n = seeds.shape[0]
     with _full_precision(), torch.no_grad():
-        F = _Field(field, V, B, step_mm, max_angle, relative_threshold, device)
-        pos = torch.as_tensor(np.asarray(seeds, np.float32), device=device)
+        F = _Field(field, V, B, step_mm, cos_max, relative_threshold, device)
+        pos = torch.as_tensor(seeds, device=device)
         gindex = torch.arange(n, dtype=torch.int64, device=device)
-        # the first direction of every seed from the whole-sphere FOD
-        if initial_directions is None:
-            first = torch.zeros((n, 3), dtype=torch.float32, device=device); ok = torch.zeros(n, dtype=torch.bool, device=device)
+        if first is None:                               # the first direction of every seed from the whole-sphere FOD
+            fdir = torch.zeros((n, 3), dtype=torch.float32, device=device)
+            ok = torch.zeros(n, dtype=torch.bool, device=device)
             for s in range(0, n, chunk):
                 c = slice(s, s + chunk)
                 pmf = F.amplitudes(pos[c])
                 u = uniform_torch(key, gindex[c], 0) if prob else None
                 idx, okc = F.choose(pmf, u, prob)
-                first[c] = torch.where(okc[:, None], F.V[idx], torch.zeros_like(F.V[idx])); ok[c] = okc
+                fdir[c] = torch.where(okc[:, None], F.V[idx], torch.zeros_like(F.V[idx])); ok[c] = okc
         else:
-            nrm = np.linalg.norm(initial_directions, axis=1)
-            ok_np = nrm > 0
-            fd = np.zeros((n, 3), np.float32); fd[ok_np] = (initial_directions[ok_np] / nrm[ok_np, None]).astype(np.float32)
-            first = torch.as_tensor(fd, device=device); ok = torch.as_tensor(ok_np, device=device)
-        slabs_f, cf, rf = _half(F, pos, first, ok, gindex, key, 0, prob, max_steps, chunk)
+            fdir = torch.as_tensor(first[0], device=device); ok = torch.as_tensor(first[1], device=device)
+        slabs_f, cf, rf = _half(F, pos, fdir, ok, gindex, key, 0, prob, max_steps, chunk)
         first_pt = pos.clone()
         for t, idx, pts in slabs_f:
             if t == 1:
                 first_pt[idx] = pts
         step1 = first_pt - pos; nrm = torch.linalg.norm(step1, dim=1); took = nrm > 0
-        d0 = torch.where(took[:, None], -step1 / torch.where(took, nrm, torch.ones_like(nrm))[:, None], -first)
+        d0 = torch.where(took[:, None], -step1 / torch.where(took, nrm, torch.ones_like(nrm))[:, None], -fdir)
         slabs_b, cb, rb = _half(F, pos, d0, ok, gindex, key, 1, prob, max_steps, chunk)
         # the ragged output: the backward points reversed, the seed, the forward points
         n_pts = 1 + cf + cb
         offsets = torch.cumsum(n_pts, 0) - n_pts
         dest0 = offsets + cb
-        total = int(n_pts.sum())
-        points = torch.zeros((total, 3), dtype=torch.float32, device=device)
+        points = torch.zeros((int(n_pts.sum()), 3), dtype=torch.float32, device=device)
         points[dest0] = pos
         for t, idx, pts in slabs_f:
             points[dest0[idx] + t] = pts
         for t, idx, pts in slabs_b:
             points[dest0[idx] - t] = pts
-        reason = np.full((n, 2), STOP_NO_DIRECTION, np.int8)
-        ok_np = ok.cpu().numpy()
-        reason[ok_np] = np.stack([rf.cpu().numpy()[ok_np], rb.cpu().numpy()[ok_np]], 1)
-        n_pts_np = n_pts.cpu().numpy().astype(np.int64)
-    off = np.concatenate([[0], np.cumsum(n_pts_np)]).astype(np.int64)
-    tg = Tractogram(points.cpu().numpy(), off, np.arange(n), reason)
-    if min_length_mm > 0:
-        tg = tg.select((tg.n_points - 1) * step_mm >= min_length_mm)
-    return tg
+        reasons = torch.stack([rf, rb], 1)
+    return points.cpu().numpy(), n_pts.cpu().numpy().astype(np.int64), reasons.cpu().numpy()

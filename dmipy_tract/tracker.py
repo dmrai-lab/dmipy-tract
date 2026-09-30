@@ -32,7 +32,7 @@ import jax.numpy as jnp
 
 from .field import FODField
 from .sphere import hemisphere, sh_matrix
-from .tractogram import Tractogram, STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
+from .tractogram import Tractogram, STOP_NONE, STOP_MASK, STOP_OUTSIDE, STOP_NO_DIRECTION, STOP_MAX_STEPS
 
 __all__ = ['track', 'RULES', 'BACKENDS']
 
@@ -79,16 +79,23 @@ def _amplitudes(field_flat, dims, inv_lin, inv_off, B, rel_thr, pos):
     return jnp.where((pmf < rel_thr * mx) | (pmf <= 0), jnp.zeros_like(pmf), pmf)
 
 
-def _sample(pmf, key):
-    """Inverse-CDF index into ``pmf`` and whether any mass exists."""
+def _index(pmf, u):
+    """The inverse-CDF index into ``pmf`` of the uniform ``u`` in ``[0, 1)``, and whether any mass exists: the number
+    of CDF entries at or below ``u`` times the total, so a ``u`` on a breakpoint lands in the next entry of positive
+    mass (never on a zero-mass entry)."""
     cdf = jnp.cumsum(pmf)
     total = cdf[-1]
-    u = jax.random.uniform(key, dtype=cdf.dtype) * total
-    idx = jnp.minimum(jnp.sum(cdf <= u), pmf.shape[0] - 1)
+    idx = jnp.minimum(jnp.sum(cdf <= u * total), pmf.shape[0] - 1)
     return idx, total > 0
 
 
+def _sample(pmf, key):
+    """:func:`_index` of the draw of ``key``."""
+    return _index(pmf, jax.random.uniform(key, dtype=pmf.dtype))
+
+
 def _argmax(pmf):
+    """The index of the maximum of ``pmf`` and whether it is positive."""
     idx = jnp.argmax(pmf)
     return idx, pmf[idx] > 0
 
@@ -412,7 +419,6 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     n = seeds.shape[0]
     V = hemisphere() if sphere is None else np.asarray(sphere, np.float64)
     B = sh_matrix(field.order, V)
-    n_dirs = V.shape[0]
     if initial_directions is not None:
         initial_directions = np.asarray(initial_directions, np.float64)
         if initial_directions.shape != (n, 3):
@@ -441,14 +447,38 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     if n == 0:
         return Tractogram(np.zeros((0, 3), np.float32), np.zeros(1, np.int64), np.zeros(0, np.int64),
                           np.zeros((0, 2), np.int8))
+
+    seeds32 = seeds.astype(np.float32)
+    first = None
+    if initial_directions is not None:
+        nrm = np.linalg.norm(initial_directions, axis=1)
+        ok = nrm > 0
+        first_dir = np.zeros((n, 3), np.float32)
+        first_dir[ok] = (initial_directions[ok] / nrm[ok, None]).astype(np.float32)
+        first = (first_dir, ok)
+    settings = dict(rule=rule, step_mm=step_mm, cos_max=float(np.cos(np.deg2rad(max_angle))),
+                    relative_threshold=relative_threshold, max_steps=max_steps, chunk=chunk)
     if backend == 'torch':
         from ._torch import track_torch
-        return track_torch(field, seeds, rule=rule, step_mm=step_mm, max_angle=max_angle, max_steps=max_steps,
-                           relative_threshold=relative_threshold, min_length_mm=min_length_mm, V=V, B=B,
-                           initial_directions=initial_directions, key=int(key), chunk=chunk, device=device)
-    key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
-    K = min(K, max_steps)
+        points, n_pts, reasons = track_torch(field, seeds32, first, V, B, key=int(key), device=device, **settings)
+    else:
+        key = jax.random.key(int(key)) if isinstance(key, (int, np.integer)) else key
+        points, n_pts, reasons = _track_jax(field, seeds32, first, V, B, key=key, K=min(K, max_steps), batch=batch,
+                                            **settings)
+    reasons = np.where(reasons == STOP_NONE, STOP_NO_DIRECTION, reasons).astype(np.int8)   # seeds without a direction
+    tg = Tractogram(points, np.concatenate([[0], np.cumsum(n_pts)]).astype(np.int64), np.arange(n), reasons)
+    if min_length_mm > 0:
+        tg = tg.select((tg.n_points - 1) * step_mm >= min_length_mm)
+    return tg
 
+
+def _track_jax(field, seeds32, first, V, B, *, rule, step_mm, cos_max, relative_threshold, max_steps, chunk, key, K,
+               batch):
+    """The JAX kernel on validated arguments: ``(points (total, 3) float32, n_pts (n,), reasons (n, 2))``, the
+    reasons :data:`~dmipy_tract.tractogram.STOP_NONE` for a seed without a first direction. ``first`` is
+    ``(first_dir (n, 3), ok (n,))`` or None to draw the first directions from the FOD."""
+    n = seeds32.shape[0]
+    n_dirs = V.shape[0]
     f32 = jnp.float32
     dims = jnp.asarray(field.shape, jnp.int32)
     field_flat = jnp.asarray(field.sh.reshape(-1, field.n_coef), f32)
@@ -459,13 +489,11 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
     Bd = jnp.asarray(B, f32)
     Vd = jnp.asarray(V, f32)
     static = (field_flat, dims, inv_lin, inv_off, mask_flat, Bd, Vd, jnp.asarray(step_mm, f32),
-              jnp.asarray(np.cos(np.deg2rad(max_angle)), f32), jnp.asarray(relative_threshold, f32))
-    seeds32 = seeds.astype(np.float32)
+              jnp.asarray(cos_max, f32), jnp.asarray(relative_threshold, f32))
 
-    # the first direction of every seed, in chunks
-    first_dir = np.zeros((n, 3), np.float32)
-    ok = np.zeros(n, bool)
-    if initial_directions is None:
+    if first is None:                                   # the first direction of every seed, in chunks
+        first_dir = np.zeros((n, 3), np.float32)
+        ok = np.zeros(n, bool)
         first_chunk = min(chunk, 1 << max(0, n - 1).bit_length())
         first_fn = _compiled_first(rule, field.n_coef, n_dirs, first_chunk)
         for s in range(0, n, first_chunk):
@@ -477,12 +505,9 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
             first_dir[s:s + m] = np.asarray(fd)[:m]
             ok[s:s + m] = np.asarray(okd)[:m]
     else:
-        nrm = np.linalg.norm(initial_directions, axis=1)
-        ok = nrm > 0
-        first_dir[ok] = (initial_directions[ok] / nrm[ok, None]).astype(np.float32)
+        first_dir, ok = first
 
-    parts_points, parts_npts = [], []
-    reason = np.full((n, 2), STOP_NO_DIRECTION, np.int8)
+    parts_points, parts_npts, parts_reasons = [], [], []
     batch = min(batch, _state_rows(n))                                  # the state's row count: 4096, 65536 or 2**20
     for b0 in range(0, n, batch):
         m = min(batch, n - b0)
@@ -504,13 +529,6 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         pts, n_pts = bt.join(fwd, bwd)
         parts_points.append(pts)
         parts_npts.append(n_pts[:m])
-        r = np.stack([np.asarray(fwd[2])[:m], np.asarray(bwd[2])[:m]], axis=1)
-        started = ok[b0:b0 + m]
-        reason[b0:b0 + m][started] = r[started]
+        parts_reasons.append(np.stack([np.asarray(fwd[2])[:m], np.asarray(bwd[2])[:m]], axis=1))
     points = parts_points[0] if len(parts_points) == 1 else np.concatenate(parts_points)
-    n_pts = np.concatenate(parts_npts)
-    offsets = np.concatenate([[0], np.cumsum(n_pts)]).astype(np.int64)
-    tg = Tractogram(points, offsets, np.arange(n), reason)
-    if min_length_mm > 0:
-        tg = tg.select((tg.n_points - 1) * step_mm >= min_length_mm)
-    return tg
+    return points, np.concatenate(parts_npts), np.concatenate(parts_reasons)

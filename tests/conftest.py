@@ -69,31 +69,36 @@ def jax_uniform(root, i, counter):
     return float(jax.random.uniform(jax.random.fold_in(jax.random.fold_in(root, i), counter), dtype=np.float32))
 
 
-def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max_steps, relative_threshold, lane_key,
-                   half_id, uniform=None):
-    """One half, one streamline, the definition step by step in float64. The RNG calls are the kernel's:
-    ``uniform(counter) -> float32`` draws for this streamline (the JAX stream by default)."""
-    if uniform is None:
-        uniform = lambda counter: float(jax.random.uniform(jax.random.fold_in(lane_key, counter), dtype=np.float32))
+def _amplitudes(field, B, pos, relative_threshold):
+    """The thresholded FOD on the sphere at ``pos``, float64."""
+    pmf = B @ field.interpolate(pos[None])[0]
+    return np.where((pmf < relative_threshold * pmf.max()) | (pmf <= 0), 0.0, pmf)
+
+
+def _pick(w, rule, draw):
+    """The direction index from the weights ``w``, or None where there is no mass: the inverse CDF of ``draw()`` in
+    the kernel's float32 arithmetic, or the maximum."""
+    if rule == 'probabilistic':
+        cdf = np.cumsum(w)
+        if cdf[-1] <= 0:
+            return None
+        return min(int(np.sum(cdf.astype(np.float32) <= np.float32(draw() * cdf[-1]))), w.shape[0] - 1)
+    idx = int(np.argmax(w))
+    return idx if w[idx] > 0 else None
+
+
+def reference_half(field, V, B, pos, direction, *, rule, step_mm, max_angle, max_steps, relative_threshold, half_id,
+                   uniform):
+    """One half, one streamline, the definition step by step in float64; ``uniform(counter) -> float32`` is the
+    backend's draw for this streamline."""
     cos_max = np.cos(np.deg2rad(max_angle))
     pts = [np.asarray(pos, np.float64)]
     d = np.asarray(direction, np.float64)
     for t in range(1, max_steps):
-        pmf = B @ field.interpolate(pts[-1][None])[0]
-        mx = pmf.max()
-        pmf = np.where((pmf < relative_threshold * mx) | (pmf <= 0), 0.0, pmf)
-        cone = np.abs(V @ d) >= cos_max
-        w = np.where(cone, pmf, 0.0)
-        if rule == 'probabilistic':
-            cdf = np.cumsum(w)
-            if cdf[-1] <= 0:
-                return np.array(pts), STOP_NO_DIRECTION
-            u = uniform(_counter(t, half_id))
-            idx = min(int(np.sum(cdf.astype(np.float32) <= np.float32(u * cdf[-1]))), V.shape[0] - 1)
-        else:
-            idx = int(np.argmax(w))
-            if w[idx] <= 0:
-                return np.array(pts), STOP_NO_DIRECTION
+        w = np.where(np.abs(V @ d) >= cos_max, _amplitudes(field, B, pts[-1], relative_threshold), 0.0)
+        idx = _pick(w, rule, lambda: uniform(_counter(t, half_id)))
+        if idx is None:
+            return np.array(pts), STOP_NO_DIRECTION
         nd = V[idx] if V[idx] @ d > 0 else -V[idx]
         new = pts[-1] + step_mm * nd
         if not nearest_voxel(new, field.affine, field.shape)[1]:
@@ -112,37 +117,23 @@ def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angl
     ``dmipy_tract._torch.uniform``)."""
     V = hemisphere() if sphere is None else np.asarray(sphere, np.float64)
     B = sh_matrix(field.order, V)
-    root = jax.random.key(key)
     if uniform is None:
+        root = jax.random.key(key)
         uniform = lambda i, counter: jax_uniform(root, i, counter)
     out = []
     for i, s in enumerate(np.asarray(seeds, np.float64)):
-        lane_key = jax.random.fold_in(root, i)
         draw = lambda counter, i=i: uniform(i, counter)
         if initial_directions is None:
-            pmf = B @ field.interpolate(s[None])[0]
-            mx = pmf.max()
-            pmf = np.where((pmf < relative_threshold * mx) | (pmf <= 0), 0.0, pmf)
-            if rule == 'probabilistic':
-                cdf = np.cumsum(pmf)
-                ok = cdf[-1] > 0
-                if ok:
-                    u = draw(0)
-                    idx = min(int(np.sum(cdf.astype(np.float32) <= np.float32(u * cdf[-1]))), V.shape[0] - 1)
-            else:
-                idx = int(np.argmax(pmf))
-                ok = pmf[idx] > 0
-            first = V[idx] if ok else np.zeros(3)
+            idx = _pick(_amplitudes(field, B, s, relative_threshold), rule, lambda: draw(0))
+            first = None if idx is None else V[idx]
         else:
             first = np.asarray(initial_directions[i], np.float64)
-            ok = np.linalg.norm(first) > 0
-            if ok:
-                first = first / np.linalg.norm(first)
-        if not ok:
+            first = first / np.linalg.norm(first) if np.linalg.norm(first) > 0 else None
+        if first is None:
             out.append((s[None].copy(), (STOP_NO_DIRECTION, STOP_NO_DIRECTION)))
             continue
         kw = dict(rule=rule, step_mm=step_mm, max_angle=max_angle, max_steps=max_steps,
-                  relative_threshold=relative_threshold, lane_key=lane_key, uniform=draw)
+                  relative_threshold=relative_threshold, uniform=draw)
         F, rf = reference_half(field, V, B, s, first, half_id=0, **kw)
         back = -(F[1] - F[0]) / np.linalg.norm(F[1] - F[0]) if len(F) >= 2 else -first
         Bk, rb = reference_half(field, V, B, s, back, half_id=1, **kw)
