@@ -376,8 +376,8 @@ def track(field, seeds_mm, *, rule='probabilistic', step_mm=0.5, max_angle=30.0,
         JAX backend only. Steps per phase between compactions of the active lanes (default ``DMIPY_TRACT_PHASE``
         = 32); the result does not depend on it.
     batch : int, optional
-        JAX backend only. Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device memory
-        (the phase slabs of a batch stay on the device until its streamlines are joined); the result does not
+        JAX backend only. Seeds per device-resident batch (default ``DMIPY_TRACT_BATCH`` = 2**20); bounds the device
+        memory (the phase slabs of a batch stay on the device until its streamlines are joined); the result does not
         depend on it. A batch is at most the state size that holds all ``n`` seeds (4,096, 65,536 or 2**20
         rows), so a larger value runs as that size.
     backend : 'jax' | 'torch'

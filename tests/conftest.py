@@ -117,9 +117,7 @@ def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angl
     ``dmipy_tract._torch.uniform``)."""
     V = hemisphere() if sphere is None else np.asarray(sphere, np.float64)
     B = sh_matrix(field.order, V)
-    if uniform is None:
-        root = jax.random.key(key)
-        uniform = lambda i, counter: jax_uniform(root, i, counter)
+    uniform = Backend("jax").uniform(key) if uniform is None else uniform
     out = []
     for i, s in enumerate(np.asarray(seeds, np.float64)):
         draw = lambda counter, i=i: uniform(i, counter)
@@ -139,6 +137,30 @@ def reference_track(field, seeds, *, rule='deterministic', step_mm=0.5, max_angl
         Bk, rb = reference_half(field, V, B, s, back, half_id=1, **kw)
         out.append((np.concatenate([Bk[:0:-1], F]), (rf, rb)))
     return out
+
+
+class Backend:
+    """A backend as a test sees it: ``kw``, the arguments that select it in :func:`dmipy_tract.track`, and
+    ``uniform(key)``, its draw ``(i, counter) -> float32`` for :func:`reference_track`."""
+
+    def __init__(self, name):
+        self.name = name
+        self.kw = dict(backend="torch", device="cpu") if name == "torch" else dict(backend="jax")
+
+    def uniform(self, key):
+        if self.name == "jax":
+            root = jax.random.key(key)
+            return lambda i, counter: jax_uniform(root, i, counter)
+        from dmipy_tract._torch import uniform
+        return lambda i, counter: float(uniform(key, np.asarray([i]), counter)[0])
+
+
+@pytest.fixture(params=["jax", "torch"])
+def backend(request):
+    """Each backend in turn; torch on the CPU, skipped where torch is not installed."""
+    if request.param == "torch":
+        pytest.importorskip("torch")
+    return Backend(request.param)
 
 
 @pytest.fixture
