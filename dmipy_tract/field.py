@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from .sphere import order_from_ncoef
+from dmipy_sim.replay import so3
 
 __all__ = ['FODField', 'trilinear_indices']
 
@@ -49,7 +49,7 @@ def trilinear_indices(voxel_coords, shape):
 class FODField:
     """``sh (X, Y, Z, n_coef)`` float32, ``affine (4, 4)`` voxel index to world millimetres, ``mask (X, Y, Z)`` bool.
 
-    ``n_coef`` must be an even-order count (15, 28, 45, 66 for orders 4, 6, 8, 10); the affine must be invertible;
+    ``n_coef`` must be an even-order count (1, 6, 15, 28, 45, 66 for orders 0, 2, 4, 6, 8, 10: ``so3.lmax_of``); the affine must be invertible;
     the mask must have the grid's shape. Anything else is refused by name.
     """
     sh: np.ndarray
@@ -61,7 +61,7 @@ class FODField:
         sh = np.ascontiguousarray(np.asarray(self.sh), dtype=np.float32)
         if sh.ndim != 4:
             raise ValueError(f"sh must be (X, Y, Z, n_coef), not shape {sh.shape}")
-        order = order_from_ncoef(sh.shape[3])
+        order = so3.lmax_of(sh.shape[3])
         affine = np.asarray(self.affine, np.float64)
         if affine.shape != (4, 4):
             raise ValueError(f"affine must be (4, 4), not {affine.shape}")

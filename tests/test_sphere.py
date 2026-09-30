@@ -2,24 +2,7 @@
 import numpy as np
 import pytest
 
-from dmipy_tract.sphere import hemisphere, sh_matrix, order_from_ncoef, ncoef_from_order
-
-
-@pytest.mark.parametrize("order", [0, 2, 4, 6, 8, 10, 12])
-def test_order_ncoef_round_trip(order):
-    assert order_from_ncoef(ncoef_from_order(order)) == order
-
-
-@pytest.mark.parametrize("n", [0, 2, 3, 4, 5, 7, 10, 14, 16, 27, 29, 44, 46])
-def test_ncoef_that_is_no_even_order_is_refused(n):
-    with pytest.raises(ValueError, match="no even-order"):
-        order_from_ncoef(n)
-
-
-@pytest.mark.parametrize("order", [-2, 1, 3])
-def test_odd_or_negative_order_is_refused(order):
-    with pytest.raises(ValueError, match="even and non-negative"):
-        ncoef_from_order(order)
+from dmipy_tract.sphere import hemisphere, sh_matrix
 
 
 def test_hemisphere_is_unit_upper_and_antipode_free():

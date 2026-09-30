@@ -18,8 +18,20 @@ def random_field(shape=(6, 7, 8), n_coef=15, seed=0, affine=None):
 
 # ------------------------------------------------------------------ refusals (by name)
 def test_refuses_coefficient_count_that_is_no_even_order():
-    with pytest.raises(ValueError, match="16 coefficients is no even-order"):
+    with pytest.raises(ValueError, match="16 coefficients is not an even-order"):
         FODField(np.zeros((2, 2, 2, 16)), np.eye(4), np.ones((2, 2, 2), bool))
+
+
+@pytest.mark.parametrize("order", [0, 2, 4, 6, 8, 10, 12])
+def test_every_even_order_is_accepted(order):
+    n_coef = (order + 1) * (order + 2) // 2
+    assert FODField(np.zeros((2, 2, 2, n_coef)), np.eye(4), np.ones((2, 2, 2), bool)).order == order
+
+
+@pytest.mark.parametrize("n", [0, 2, 3, 4, 5, 7, 10, 14, 16, 27, 29, 44, 46])
+def test_every_count_that_is_no_even_order_is_refused(n):
+    with pytest.raises(ValueError, match=f"{n} coefficients is not an even-order"):
+        FODField(np.zeros((2, 2, 2, n)), np.eye(4), np.ones((2, 2, 2), bool))
 
 
 def test_refuses_non_4d_sh():
