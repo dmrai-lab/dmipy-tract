@@ -116,3 +116,7 @@ pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git"
 pip install -e .            # CPU; pip install -e ".[cuda]" for a CUDA device
 pip install -e ".[test]"    # dipy, scipy, nibabel, dmipy-fit, huggingface_hub for the tests and benchmarks
 ```
+
+## License
+
+Dual-licensed: **GNU AGPL-3.0** for open-source use, or a **commercial license** for proprietary use; see [LICENSING.md](LICENSING.md) (commercial: rutger.fick@dmrai-lab.org).
