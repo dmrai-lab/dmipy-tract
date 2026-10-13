@@ -95,7 +95,7 @@ class Tractogram:
     def to_tck(self, path):
         """Write as an MRtrix ``.tck`` (Float32LE, millimetres) through dmipy-sim's writer."""
         from dmipy_sim.io.strands import write_tck
-        write_tck(path, [p.astype(np.float64) * 1e-3 for p in self.to_lists()], coordinate_unit_m=1e-3)
+        write_tck(path, self.points.astype(np.float64) * 1e-3, self.offsets, coordinate_unit_m=1e-3)
 
     @classmethod
     def concatenate(cls, parts):
