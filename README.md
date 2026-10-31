@@ -60,7 +60,7 @@ false, 0 missed), as in the published dipy runs.
 | tracker | streamlines | Pearson vs strand count | vs area | tracking |
 |---|---|---|---|---|
 | this package, L40S | 659,840 | **0.927** | 0.929 | **1.6 s** steady, 11 s first call (compile) |
-| this package, CPU (16 of 72 cores, shared box, v0 before compaction) | 659,840 | 0.927 | 0.929 | 659 s |
+| this package, CPU (16 cores, v0 before compaction) | 659,840 | 0.927 | 0.929 | 659 s |
 | dipy `LocalTracking` on the same FOD and seeds, L40S host | 2,822,911 (one per FOD peak per seed) | 0.917 | 0.917 | 1016 s |
 | the replay paper's dipy pipeline (dipy CSD), dmipy-sim#505 | 1.6 M | 0.904 – 0.912 | | 250 – 500 s |
 

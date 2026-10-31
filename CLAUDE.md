@@ -69,6 +69,6 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
   `K`, `L`, `forward`); the test suite (many small `n`) is the check.
 - `real` (a seed, not a padding row) is not `ok` (has a first direction): a seed without a direction is a real
   one-point streamline and gets its seed row; padding rows get nothing.
-- The JAX CUDA plugin needs the nvidia libraries on `LD_LIBRARY_PATH` in a uv venv (see the L40S notes in the
-  memory), else it falls back to CPU silently; `JAX_PLATFORMS=cpu` in `tests/conftest.py` is a default, a GPU run
+- The JAX CUDA plugin needs the nvidia libraries on `LD_LIBRARY_PATH` in a uv venv, else it falls back to CPU
+  silently; `JAX_PLATFORMS=cpu` in `tests/conftest.py` is a default, a GPU run
   sets `JAX_PLATFORMS=cuda,cpu` (both, for the CUDA-against-CPU test).
