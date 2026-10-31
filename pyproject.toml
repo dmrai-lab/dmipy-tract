@@ -7,23 +7,44 @@ name = "dmipy-tract"
 version = "0.1.0.dev0"
 description = "Streamline tractography on FOD fields, batched on the JAX device"
 readme = "README.md"
+authors = [{name = "Rutger Fick", email = "fick.rutger@gmail.com"}]
+keywords = ["tractography", "diffusion MRI", "JAX", "streamlines"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Medical Science Apps.",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: GNU Affero General Public License v3 (AGPLv3)",
+]
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-only OR LicenseRef-Commercial"}  # dual-licensed; see LICENSING.md
 dependencies = [
     "numpy>=1.24",
     "jax>=0.4.30",
-    "dmipy-sim",
+    # the lower bound is the release that has the SH basis and the .tck / .mif files this package imports; it becomes
+    # ">=3,<4" with the first dmipy-sim 3.x on PyPI (CI installs the pinned commit recorded in .github/workflows/ci.yml)
+    "dmipy-sim>=2.2,<4",
 ]
 
 [project.optional-dependencies]
 cuda = ["jax[cuda12]"]
 torch = ["torch>=2.2"]                 # the torch kernel, for hosts that run PyTorch only
-# dipy is the test oracle, never a runtime import; dipy 1.12 needs trx-python, which has no Python 3.10 wheel
+# dipy is the test oracle, never a runtime import; dipy 1.12 needs trx-python, which has no Python 3.10 wheel.
+# The torch tests skip without torch (CI installs the CPU wheel); the DiSCo acceptance needs the `acceptance` extra.
 test = [
-    "pytest>=7", "scipy>=1.10", "nibabel>=5.0", "dmipy-fit", "huggingface_hub", "torch>=2.2",
+    "pytest>=7", "scipy>=1.10", "nibabel>=5.0",
     "dipy>=1.12; python_version >= '3.11'",
     "dipy<1.12; python_version < '3.11'",
 ]
+acceptance = ["nibabel>=5.0", "dmipy-fit", "huggingface_hub"]     # the slow DiSCo acceptance and benchmarks/disco.py
+
+[project.urls]
+Homepage = "https://github.com/dmrai-lab/dmipy-tract"
+Source = "https://github.com/dmrai-lab/dmipy-tract"
+Issues = "https://github.com/dmrai-lab/dmipy-tract/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
