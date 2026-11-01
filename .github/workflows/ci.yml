@@ -3,15 +3,12 @@ on:
   push:
     branches: [main]
   pull_request:
-  schedule:
-    - cron: '0 5 * * 0'      # weekly: the slow DiSCo acceptance
   workflow_dispatch: {}
 env:
   # dmipy-sim is installed from this commit until a 3.x release is on PyPI (then the dependency is ">=3,<4" and this goes)
   DMIPY_SIM_COMMIT: 0908d1e6a834518dfa6254b6e31343d10850a78b
 jobs:
   test:
-    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -32,7 +29,7 @@ jobs:
           JAX_PLATFORMS: cpu
         run: python -m pytest tests -q -m "not slow"
   slow:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
