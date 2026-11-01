@@ -7,7 +7,7 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
 | file | holds |
 |---|---|
 | `dmipy_tract/field.py` | `FODField(sh, affine, mask)`: validation, the clamped trilinear interpolant (numpy), the mask lookup; `nearest_voxel`, the one numpy nearest-voxel rule |
-| `dmipy_tract/sphere.py` | `hemisphere(n)` (Fibonacci, z > 0), `sh_matrix(order, dirs)` = `dmipy_sim.replay.so3.real_sh` (the order/count conversions are `so3.lmax_of` / `so3.n_sh_coeffs`) |
+| `dmipy_tract/sphere.py` | `hemisphere(n)` (Fibonacci, z > 0), `sh_matrix(order, dirs)` = `dmipy_replay.replay.so3.real_sh` (the order/count conversions are `so3.lmax_of` / `so3.n_sh_coeffs`) |
 | `dmipy_tract/tracker.py` | `track()`: validation, the host-side setup and assembly of both backends; `_track_jax`; the first-direction kernel (`_first`), the phase kernel (`_phase`, K steps for the lanes it is given), `_Batch` (device-resident state of one batch of seeds; phases with compaction of the active lanes; the device-side join of the phase slabs into the ragged output) and its fixed-shape helpers, all module-level `jax.jit`; `_counter`, the RNG counter law |
 | `dmipy_tract/_torch.py` | the torch kernel behind `track(backend="torch")`: `_Field` (field, sphere, settings on the device; `interpolate`, `amplitudes`, `choose`, `mask_at`), `_half` (one step for every active lane, in chunks, one `nonzero` per step; a lockstep half, so point `t` of a lane is taken at loop step `t` and the join is a scatter per step), `track_torch`; `uniform` / `uniform_torch`, the counter-based draw in numpy and torch (identical bits) |
 | `dmipy_tract/tractogram.py` | `Tractogram` (ragged points/offsets, seed_index, stop_reason), `.to_tck` via `dmipy_sim.io.strands.write_tck` |
@@ -22,7 +22,7 @@ Read `README.md` first: it says what the tracker is. This file is what an agent 
   backend, when it is asked for. Shared
   mathematics (the SH basis, `.tck`/`.mif`) lives in dmipy-sim, once.
 - **The basis is `so3.real_sh`** (orthonormal, even orders, MRtrix `tournier07` non-legacy). A dipy `shm_coeff` in
-  `descoteaux07` must be converted (`dmipy_sim.replay.fod.FOD.from_sh`) before it becomes an `FODField`; nothing here
+  `descoteaux07` must be converted (`dmipy_replay.replay.fod.FOD.from_sh`) before it becomes an `FODField`; nothing here
   guesses a basis.
 - **FOD directions are world coordinates** (MRtrix's convention). Tracking is in world millimetres; interpolation
   and the mask lookup go through the inverse affine. For a scaling-plus-translation affine this is dipy's voxel-axis

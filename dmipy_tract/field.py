@@ -1,7 +1,7 @@
 """An FOD field on an image grid: the one input every tracker in this package takes.
 
 DiSCo, the BATMAN brain, an MRtrix ``.mif`` FOD and a dmipy-fit CSD are the same object here: even-order real
-spherical-harmonics coefficients per voxel in dmipy-sim's orthonormal basis (:func:`dmipy_sim.replay.so3.real_sh`,
+spherical-harmonics coefficients per voxel in dmipy-replay's orthonormal basis (:func:`dmipy_replay.replay.so3.real_sh`,
 MRtrix's ``tournier07``), a voxel-to-world affine in millimetres, and a boolean mask that is the tracking domain.
 The FOD's directions are in world coordinates, as MRtrix stores them; for an image whose affine is a scaling and
 a translation this is also dipy's voxel-axis frame.
@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from dmipy_sim.replay import so3
+from dmipy_replay.replay import so3
 
 __all__ = ['FODField', 'nearest_voxel']
 
