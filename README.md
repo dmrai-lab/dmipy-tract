@@ -5,7 +5,7 @@ Streamline tractography on FOD fields, batched on the JAX device. One data model
 ```python
 from dmipy_tract import FODField, seeds_from_mask, track, connectivity
 
-field = FODField(sh, affine, mask)                     # (X, Y, Z, n_coef) SH in dmipy-replay's basis, voxel->mm, domain
+field = FODField(sh, affine, mask)                     # (X, Y, Z, n_coef) SH in dmipy-analytic's basis, voxel->mm, domain
 seeds = seeds_from_mask(rois > 0, affine, density=4)   # (n, 3) mm, dipy's construction
 tg = track(field, seeds, rule='probabilistic', step_mm=0.5, max_angle=30.0, key=0)
 matrix, ends = connectivity(tg, rois, affine)          # streamline counts between regions
