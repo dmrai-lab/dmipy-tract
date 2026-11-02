@@ -19,5 +19,5 @@ dmipy-tract tracks streamlines on fibre-orientation-distribution fields, batched
 - **Pairs with** [dmipy-replay](https://github.com/dmrai-lab/dmipy-replay) `>=0.2,<0.3` (the SH basis) and
   [dmipy-sim](https://github.com/dmrai-lab/dmipy-sim) `>=3,<4` (the `.mif` reader and the `.tck` writer). The
   `acceptance` extra adds dmipy-fit `>=3,<4` for the DiSCo acceptance and its benchmark; the `torch` extra adds the
-  PyTorch kernel and the `cuda` extra JAX on CUDA 12. JAX >= 0.4.30, Python >= 3.10.
+  PyTorch kernel and the `cuda` extra JAX on CUDA 12. NumPy >= 2.0, JAX >= 0.6.2, Python >= 3.10.
 - **Licence** AGPL-3.0-only or commercial.

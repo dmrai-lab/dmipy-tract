@@ -22,8 +22,8 @@ classifiers = [
 requires-python = ">=3.10"
 license = {text = "AGPL-3.0-only OR LicenseRef-Commercial"}  # dual-licensed; see LICENSING.md
 dependencies = [
-    "numpy>=1.24",
-    "jax>=0.4.30",
+    "numpy>=2.0",
+    "jax>=0.6.2",
     # the .mif reader (FODField.from_mif) and the .tck writer (Tractogram.to_tck) are dmipy-sim's
     "dmipy-sim>=3,<4",
     # the SH basis (dmipy_replay.replay.so3)
