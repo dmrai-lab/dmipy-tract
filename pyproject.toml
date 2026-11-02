@@ -26,8 +26,10 @@ dependencies = [
     "jax>=0.6.2",
     # the .mif reader (FODField.from_mif) and the .tck writer (Tractogram.to_tck) are dmipy-sim's
     "dmipy-sim>=3,<4",
-    # the SH basis (dmipy_replay.replay.so3)
+    # the SH layout helpers (dmipy_replay.replay.so3: lmax_of, rotate_sh)
     "dmipy-replay>=0.2,<0.3",
+    # the SH basis (dmipy_analytic.harmonics: real_sh)
+    "dmipy-analytic>=3,<4",
 ]
 
 [project.optional-dependencies]

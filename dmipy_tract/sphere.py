@@ -1,12 +1,12 @@
 """The direction set a tracker chooses from, and the spherical-harmonics matrix that evaluates an FOD on it.
 
-The basis is dmipy-replay's :func:`dmipy_replay.replay.so3.real_sh`: orthonormal real spherical harmonics, even orders,
-compact layout (MRtrix's ``tournier07`` convention), and its coefficient count ``so3.n_sh_coeffs`` / order
-``so3.lmax_of``; nothing here defines a basis of its own.
+The basis is dmipy-analytic's :func:`dmipy_analytic.harmonics.real_sh`: orthonormal real spherical harmonics, even
+orders, compact layout (MRtrix's ``tournier07`` convention), and its coefficient count ``harmonics.n_sh_coeffs`` (the
+order of a count is dmipy-replay's ``so3.lmax_of``); nothing here defines a basis of its own.
 """
 import numpy as np
 
-from dmipy_replay.replay import so3
+from dmipy_analytic import harmonics
 
 __all__ = ['hemisphere', 'sh_matrix']
 
@@ -36,4 +36,4 @@ def sh_matrix(order, dirs):
     norms = np.linalg.norm(dirs, axis=1)
     if not np.allclose(norms, 1.0, atol=1e-6):
         raise ValueError("dirs must be unit vectors")
-    return so3.real_sh(int(order), dirs)
+    return harmonics.real_sh(int(order), dirs)
