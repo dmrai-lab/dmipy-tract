@@ -27,6 +27,8 @@ dependencies = [
     # the lower bound is the release that has the SH basis and the .tck / .mif files this package imports; it becomes
     # ">=3,<4" with the first dmipy-sim 3.x on PyPI (CI installs the pinned commit recorded in .github/workflows/ci.yml)
     "dmipy-sim>=2.2,<4",
+    # the SH basis (dmipy_replay.replay.so3); 0.2 is the release that has it (CI installs the pinned commit of ci.yml)
+    "dmipy-replay>=0.1,<0.3",
 ]
 
 [project.optional-dependencies]

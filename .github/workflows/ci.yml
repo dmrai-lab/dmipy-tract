@@ -5,8 +5,11 @@ on:
   pull_request:
   workflow_dispatch: {}
 env:
-  # dmipy-sim is installed from this commit until a 3.x release is on PyPI (then the dependency is ">=3,<4" and this goes)
-  DMIPY_SIM_COMMIT: 0908d1e6a834518dfa6254b6e31343d10850a78b
+  # dmipy-sim and dmipy-replay are installed from these commits until dmipy-sim 3.x and dmipy-replay 0.2 are on PyPI
+  # (then the dependencies are ">=3,<4" and ">=0.2,<0.3" and these go): the head of the replay move's S3b
+  # (dmrai-lab/dmipy-sim#873), moved to its merge on main when it merges, and the merge of dmrai-lab/dmipy-replay#20 (R6)
+  DMIPY_SIM_COMMIT: 23cfb524a6d79405417eb8dd29f9c756f0e3bb5d
+  DMIPY_REPLAY_REF: 1871a40630364107c0adca3c35541f6bbe112eb8
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -21,6 +24,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
+          pip install "dmipy-replay @ git+https://github.com/dmrai-lab/dmipy-replay.git@${DMIPY_REPLAY_REF}"
           pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git@${DMIPY_SIM_COMMIT}"
           pip install torch --index-url https://download.pytorch.org/whl/cpu    # the CPU wheel, so the torch tests run
           pip install -e ".[test]"
@@ -40,6 +44,7 @@ jobs:
       - name: Install
         run: |
           python -m pip install -U pip
+          pip install "dmipy-replay @ git+https://github.com/dmrai-lab/dmipy-replay.git@${DMIPY_REPLAY_REF}"
           pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git@${DMIPY_SIM_COMMIT}"
           pip install torch --index-url https://download.pytorch.org/whl/cpu
           pip install -e ".[test,acceptance]"
