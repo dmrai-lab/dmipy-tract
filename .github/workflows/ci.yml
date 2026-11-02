@@ -9,7 +9,7 @@ env:
   # (then the dependencies are ">=3,<4" and ">=0.2,<0.3" and these go): the head of the replay move's S3b
   # (dmrai-lab/dmipy-sim#873), moved to its merge on main when it merges, and the merge of dmrai-lab/dmipy-replay#20 (R6)
   DMIPY_SIM_COMMIT: 23cfb524a6d79405417eb8dd29f9c756f0e3bb5d
-  DMIPY_REPLAY_REF: 1871a40630364107c0adca3c35541f6bbe112eb8
+  DMIPY_REPLAY_REF: 85da6252d57b31dd55aaeb1038acea5856630a8d
 jobs:
   test:
     runs-on: ubuntu-latest
