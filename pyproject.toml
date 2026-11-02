@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dmipy-tract"
-version = "0.1.0.dev0"
+version = "0.1.0"
 description = "Streamline tractography on FOD fields, batched on the JAX device"
 readme = "README.md"
 authors = [{name = "Rutger Fick", email = "fick.rutger@gmail.com"}]
@@ -24,11 +24,10 @@ license = {text = "AGPL-3.0-only OR LicenseRef-Commercial"}  # dual-licensed; se
 dependencies = [
     "numpy>=1.24",
     "jax>=0.4.30",
-    # the lower bound is the release that has the SH basis and the .tck / .mif files this package imports; it becomes
-    # ">=3,<4" with the first dmipy-sim 3.x on PyPI (CI installs the pinned commit recorded in .github/workflows/ci.yml)
-    "dmipy-sim>=2.2,<4",
-    # the SH basis (dmipy_replay.replay.so3); 0.2 is the release that has it (CI installs the pinned commit of ci.yml)
-    "dmipy-replay>=0.1,<0.3",
+    # the .mif reader (FODField.from_mif) and the .tck writer (Tractogram.to_tck) are dmipy-sim's
+    "dmipy-sim>=3,<4",
+    # the SH basis (dmipy_replay.replay.so3)
+    "dmipy-replay>=0.2,<0.3",
 ]
 
 [project.optional-dependencies]
@@ -41,7 +40,7 @@ test = [
     "dipy>=1.12; python_version >= '3.11'",
     "dipy<1.12; python_version < '3.11'",
 ]
-acceptance = ["nibabel>=5.0", "dmipy-fit", "huggingface_hub"]     # the slow DiSCo acceptance and benchmarks/disco.py
+acceptance = ["nibabel>=5.0", "dmipy-fit>=3,<4", "huggingface_hub"]     # the slow DiSCo acceptance and benchmarks/disco.py
 
 [project.urls]
 Homepage = "https://github.com/dmrai-lab/dmipy-tract"
