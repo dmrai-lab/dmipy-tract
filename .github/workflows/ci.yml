@@ -30,7 +30,10 @@ jobs:
           pip install "dmipy-replay @ git+https://github.com/dmrai-lab/dmipy-replay.git@${DMIPY_REPLAY_REF}"
           pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git@${DMIPY_SIM_COMMIT}"
           pip install torch --index-url https://download.pytorch.org/whl/cpu    # the CPU wheel, so the torch tests run
-          pip install -e ".[test]"
+          # dmipy-tract's bounds (dmipy-sim>=3,<4, dmipy-replay>=0.2,<0.3) name the releases; the commits above are still
+          # versioned 2.2.0 and 0.1.0, so the package is installed without resolving them and its `test` extra is listed here
+          pip install --no-deps -e .
+          pip install "pytest>=7" "scipy>=1.10" "nibabel>=5.0" "dipy>=1.12; python_version >= '3.11'" "dipy<1.12; python_version < '3.11'"
       - name: Test
         env:
           JAX_PLATFORMS: cpu

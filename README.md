@@ -5,7 +5,7 @@ Streamline tractography on FOD fields, batched on the JAX device. One data model
 ```python
 from dmipy_tract import FODField, seeds_from_mask, track, connectivity
 
-field = FODField(sh, affine, mask)                     # (X, Y, Z, n_coef) SH in dmipy-sim's basis, voxel->mm, domain
+field = FODField(sh, affine, mask)                     # (X, Y, Z, n_coef) SH in dmipy-analytic's basis, voxel->mm, domain
 seeds = seeds_from_mask(rois > 0, affine, density=4)   # (n, 3) mm, dipy's construction
 tg = track(field, seeds, rule='probabilistic', step_mm=0.5, max_angle=30.0, key=0)
 matrix, ends = connectivity(tg, rois, affine)          # streamline counts between regions
@@ -112,9 +112,16 @@ same kernel and the same `Tractogram`, none of them here.
 ## Install
 
 ```
-pip install "dmipy-sim @ git+https://github.com/dmrai-lab/dmipy-sim.git"
-pip install -e .            # CPU; pip install -e ".[cuda]" for a CUDA device
-pip install -e ".[test]"    # dipy, scipy, nibabel, dmipy-fit, huggingface_hub for the tests and benchmarks
+pip install dmipy-tract                # CPU, with dmipy-sim and dmipy-replay
+pip install "dmipy-tract[cuda]"        # JAX on a CUDA 12 device
+pip install "dmipy-tract[torch]"       # + the PyTorch kernel
+```
+
+From a checkout:
+
+```
+pip install -e ".[test]"               # dipy (the oracle), scipy, nibabel, pytest
+pip install -e ".[test,acceptance]"    # + dmipy-fit and huggingface_hub, for the DiSCo acceptance and its benchmark
 ```
 
 ## License
