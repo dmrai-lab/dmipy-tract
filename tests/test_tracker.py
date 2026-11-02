@@ -8,7 +8,7 @@ import pytest
 import jax
 import jax.numpy as jnp
 
-from dmipy_sim.replay.so3 import rotate_sh
+from dmipy_replay.replay.so3 import rotate_sh
 
 from dmipy_tract import FODField, track, hemisphere, sh_matrix
 from dmipy_tract.tracker import _index, _sample
