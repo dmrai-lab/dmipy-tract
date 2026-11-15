@@ -59,10 +59,12 @@ false, 0 missed), as in the published dipy runs.
 
 | tracker | streamlines | Pearson vs strand count | vs area | tracking |
 |---|---|---|---|---|
-| this package, L40S | 659,840 | **0.927** | 0.929 | **1.6 s** steady, 11 s first call (compile) |
-| this package, CPU (16 cores, v0 before compaction) | 659,840 | 0.927 | 0.929 | 659 s |
+| this package, L40S | 659,840 | **0.929** | 0.931 | **1.6 s** steady, 11 s first call (compile) |
+| this package, CPU (16 cores, v0 before compaction) | 659,840 | 0.929 | 0.931 | 659 s |
 | dipy `LocalTracking` on the same FOD and seeds, L40S host | 2,822,911 (one per FOD peak per seed) | 0.917 | 0.917 | 1016 s |
 | the replay paper's dipy pipeline (dipy CSD), dmipy-sim#505 | 1.6 M | 0.904 – 0.912 | | 250 – 500 s |
+
+The correlations of this package's rows are those of the published replay volume (`benchmarks/out/disco_reference_cpu.json`); the timings were measured on an earlier replay of the same pack, on which the two correlations read 0.927 and 0.929 (the older recorded outputs in `benchmarks/out/` keep those), and dipy's row (0.917, 0.917) was measured on that earlier volume too.
 
 The two connectivity matrices (this tracker and dipy on the same field) correlate at 0.997. On the L40S on
 2026-09-29 the CPU and GPU tractograms of this run were bit-identical (lengths, stop reasons and positions): a
