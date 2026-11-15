@@ -41,6 +41,7 @@ test = [
     "pytest>=7", "scipy>=1.10", "nibabel>=5.0",
     "dipy>=1.12; python_version >= '3.11'",
     "dipy<1.12; python_version < '3.11'",
+    "huggingface_hub",
 ]
 acceptance = ["nibabel>=5.0", "dmipy-fit>=3,<4", "huggingface_hub"]     # the slow DiSCo acceptance and benchmarks/disco.py
 

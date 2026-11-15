@@ -20,6 +20,8 @@ import numpy as np
 
 REF_DEFAULT = os.environ.get("DISCO_REF", "disco-data")     # the DiSCo download: mask, ROIs, ground-truth matrices
 HF_REPO = "SubstrateCommons/disco-replay"
+REMOTE_INPUTS = tuple(f"disco/reference/{f}" for f in
+                      ("disco_replay_bare.nii.gz", "DiSCo_gradients.bvals", "DiSCo_gradients_dipy.bvecs"))   # what a run without --dwi downloads: volume, bvals, bvecs
 SH_ORDER = 8
 
 
@@ -27,8 +29,14 @@ def load_volume(dwi, bvals, bvecs):
     import nibabel as nib
     if dwi is None:
         from huggingface_hub import hf_hub_download
-        dwi, bvals, bvecs = (hf_hub_download(repo_id=HF_REPO, repo_type="dataset", filename=f"disco/reference/{f}")
-                             for f in ("disco_replay_bare.nii.gz", "DiSCo_gradients.bvals", "DiSCo_gradients_dipy.bvecs"))
+        from huggingface_hub.errors import EntryNotFoundError
+        paths = []
+        for f in REMOTE_INPUTS:
+            try:
+                paths.append(hf_hub_download(repo_id=HF_REPO, repo_type="dataset", filename=f))
+            except EntryNotFoundError as e:
+                raise FileNotFoundError(f"the benchmark's input {f} is not in the dataset {HF_REPO}") from e
+        dwi, bvals, bvecs = paths
     img = nib.load(dwi)
     data = np.asarray(img.dataobj, dtype=np.float64)
     bvals_mm2 = np.loadtxt(bvals).ravel()
