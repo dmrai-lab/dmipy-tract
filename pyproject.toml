@@ -56,4 +56,5 @@ include = ["dmipy_tract*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+addopts = "--durations=25 --durations-min=1.0"
 markers = ["slow: needs data or minutes (the DiSCo acceptance, the benchmarks)"]
